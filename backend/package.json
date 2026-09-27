@@ -1,0 +1,46 @@
+{
+  "name": "voice-of-digi-bengal-backend",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.0.0 <25"
+  },
+  "type": "module",
+  "scripts": {
+    "dev": "nodemon --watch src --ext ts --exec \"tsx src/server.ts\"",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "test": "node --test --import tsx --import ./src/test/setup.ts src/test/**/*.test.ts",
+    "test:integration": "node --test --import tsx --import ./src/test/setup.ts src/test/api.integration.ts",
+    "test:load": "node scripts/load-test.mjs",
+    "hash-admin-password": "node scripts/hash-admin-password.mjs",
+    "db:migrate": "node scripts/migrate.mjs",
+    "import:homepage-images": "node scripts/import-site-images.mjs"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "google-auth-library": "^11.1.0",
+    "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "morgan": "^1.10.0",
+    "nodemailer": "^10.0.10",
+    "pg": "^8.16.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.5",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/morgan": "^1.9.10",
+    "@types/node": "^22.13.0",
+    "@types/nodemailer": "^8.0.2",
+    "@types/pg": "^8.23.1",
+    "@types/supertest": "^6.0.1",
+    "nodemon": "^3.1.14",
+    "supertest": "^7.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
