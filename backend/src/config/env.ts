@@ -100,11 +100,9 @@ if (env.NODE_ENV === 'production') {
     throw new Error('OBSERVABILITY_TOKEN must be configured in production.');
   }
 
-  if (env.CORS_ORIGIN.includes('localhost')) {
-    throw new Error('CORS_ORIGIN must contain the production frontend origin.');
-  }
-
-  if (env.FRONTEND_URL.includes('localhost')) {
-    throw new Error('FRONTEND_URL must contain the production frontend origin.');
+  const configuredOrigins = env.CORS_ORIGIN.split(',').map((origin) => origin.trim().replace(/\/$/, '')).filter(Boolean);
+  const frontendOrigin = new URL(env.FRONTEND_URL).origin;
+  if (!configuredOrigins.includes(frontendOrigin)) {
+    throw new Error('CORS_ORIGIN must include FRONTEND_URL.');
   }
 }

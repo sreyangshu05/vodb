@@ -36,6 +36,10 @@ const allowedCorsOrigins = new Set([
       ]
     : []),
 ]);
+const frontendUrl = env.FRONTEND_URL.trim();
+if (frontendUrl && !frontendUrl.includes('localhost') && !frontendUrl.includes('127.0.0.1')) {
+  allowedCorsOrigins.add(frontendUrl.replace(/\/$/, ''));
+}
 
 app.use(
   cors({
