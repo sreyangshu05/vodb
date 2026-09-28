@@ -23,8 +23,13 @@ app.use(requestIdMiddleware);
 
 // Keep local Vite fallback/preview and admin preview origins available even
 // when an older .env file is still being used by a running development process.
+// Both deployed site hostnames are accepted so a stale Render CORS_ORIGIN
+// cannot break requests from the apex domain after a www/apex redirect change.
 const allowedCorsOrigins = new Set([
   ...env.CORS_ORIGIN.split(',').map((value) => value.trim()).filter(Boolean),
+  ...(env.NODE_ENV === 'production'
+    ? ['https://voiceofdigibengal.com', 'https://www.voiceofdigibengal.com']
+    : []),
   ...(env.NODE_ENV !== 'production'
     ? [
         'http://localhost:4173',
