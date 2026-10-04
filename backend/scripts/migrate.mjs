@@ -11,6 +11,12 @@ const repoRoot = path.resolve(backendRoot, '..');
 const migrationsDirectory = path.resolve(repoRoot, 'database/migrations');
 dotenv.config({ path: path.resolve(backendRoot, '.env') });
 
+const onlyIndex = process.argv.indexOf('--only');
+const onlyMigration = onlyIndex >= 0 ? process.argv[onlyIndex + 1] : undefined;
+if (onlyIndex >= 0 && (!onlyMigration || !/^\d{3}_[a-z0-9_]+\.sql$/i.test(onlyMigration))) {
+  throw new Error('Usage: npm run db:migrate -- --only <migration-file-name>');
+}
+
 const connectionString = process.env.DIRECT_DATABASE_URL || process.env.DATABASE_URL;
 if (connectionString) {
   const hostname = new URL(connectionString).hostname;
@@ -50,9 +56,14 @@ try {
     .filter((name) => /^\d{3}_[a-z0-9_]+\.sql$/i.test(name))
     .sort();
   if (files.length === 0) throw new Error(`No SQL migrations found in ${migrationsDirectory}`);
+  if (onlyMigration && !files.includes(onlyMigration)) {
+    throw new Error(`Unknown migration: ${onlyMigration}`);
+  }
 
   let applied = 0;
+  let alreadyCurrent = 0;
   for (const name of files) {
+    if (onlyMigration && name > onlyMigration) break;
     const sql = await readFile(path.join(migrationsDirectory, name), 'utf8');
     const checksum = createHash('sha256').update(sql).digest('hex');
     const existing = await client.query(
@@ -65,7 +76,12 @@ try {
         throw new Error(`${name} was changed after being recorded. Create a new migration instead of editing an applied file.`);
       }
       process.stdout.write(`Already applied: ${name}\n`);
+      alreadyCurrent += 1;
       continue;
+    }
+
+    if (onlyMigration && name !== onlyMigration) {
+      throw new Error(`Cannot apply only ${onlyMigration}; prerequisite ${name} is not recorded as applied.`);
     }
 
     process.stdout.write(`Applying: ${name}\n`);
@@ -77,7 +93,7 @@ try {
     applied += 1;
   }
 
-  process.stdout.write(`Migration run complete: ${applied} applied, ${files.length - applied} already current.\n`);
+  process.stdout.write(`Migration run complete: ${applied} applied, ${alreadyCurrent} already current.\n`);
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   process.stderr.write(`Migration failed: ${message}\n`);
