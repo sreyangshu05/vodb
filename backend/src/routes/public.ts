@@ -86,32 +86,46 @@ router.post('/translate', translationLimiter, async (req, res, next) => {
     if (!indexesToTranslate.length) return res.json({ translatedTexts: texts });
     const requestBody = JSON.stringify({ q: indexesToTranslate.map((index) => texts[index]), source: 'auto', target: target === 'zh-CN' ? 'zh' : target, format: 'text' });
     let translatedValues: string[] | null = null;
-    const providerStatuses: number[] = [];
+    const providerFailures: Array<{ host: string; status?: number; reason: string; code?: string }> = [];
     for (const endpoint of translationProviders) {
+      const host = new URL(endpoint).hostname;
       try {
         const upstream = await fetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: requestBody,
-          signal: AbortSignal.timeout(12000),
+          signal: AbortSignal.timeout(18000),
         });
         if (!upstream.ok) {
-          providerStatuses.push(upstream.status);
+          providerFailures.push({ host, status: upstream.status, reason: 'http_error' });
           continue;
         }
-        const result: unknown = await upstream.json();
-        if (!result || typeof result !== 'object' || !('translatedText' in result)) continue;
+        let result: unknown;
+        try {
+          result = await upstream.json();
+        } catch {
+          providerFailures.push({ host, status: upstream.status, reason: 'invalid_json' });
+          continue;
+        }
+        if (!result || typeof result !== 'object' || !('translatedText' in result)) {
+          providerFailures.push({ host, status: upstream.status, reason: 'missing_translation' });
+          continue;
+        }
         const values = Array.isArray(result.translatedText) ? result.translatedText : [result.translatedText];
         if (values.length === indexesToTranslate.length && values.every((text) => typeof text === 'string')) {
           translatedValues = values as string[];
           break;
         }
-      } catch {
-        // Try the next public instance when a demo is offline or times out.
+        providerFailures.push({ host, status: upstream.status, reason: 'unexpected_translation_shape' });
+      } catch (error) {
+        const code = error && typeof error === 'object' && 'cause' in error && error.cause && typeof error.cause === 'object' && 'code' in error.cause && typeof error.cause.code === 'string'
+          ? error.cause.code
+          : undefined;
+        providerFailures.push({ host, reason: error instanceof Error ? error.name : 'network_error', ...(code ? { code } : {}) });
       }
     }
     if (!translatedValues) {
-      logger.warn('translation_providers_unavailable', { statuses: providerStatuses });
+      logger.warn('translation_providers_unavailable', { providers: providerFailures });
       return res.status(502).json({ error: 'translation_unavailable', message: 'Translation is temporarily unavailable. Please try again later.' });
     }
     const translatedTexts = [...texts];
