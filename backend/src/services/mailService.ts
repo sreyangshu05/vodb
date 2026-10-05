@@ -32,20 +32,20 @@ export async function sendPasswordResetOtp(email: string, code: string): Promise
   }
 }
 
-export async function sendNewsletterConfirmation(email: string, token: string): Promise<void> {
+export async function sendNewsletterConfirmation(email: string, confirmationToken: string, unsubscribeToken: string): Promise<void> {
   if (!transporter || !env.SMTP_FROM) {
     throw new AppError(503, 'email_delivery_unavailable', 'Newsletter email delivery is temporarily unavailable.');
   }
 
-  const confirmationUrl = `${env.FRONTEND_URL}/newsletter/confirm?token=${encodeURIComponent(token)}`;
-  const unsubscribeUrl = `${env.FRONTEND_URL}/newsletter/unsubscribe?token=${encodeURIComponent(token)}`;
+  const confirmationUrl = `${env.FRONTEND_URL}/newsletter/confirm?token=${encodeURIComponent(confirmationToken)}`;
+  const unsubscribeUrl = `${env.FRONTEND_URL}/newsletter/unsubscribe?token=${encodeURIComponent(unsubscribeToken)}`;
   try {
     await transporter.sendMail({
       from: env.SMTP_FROM,
       to: email,
       subject: 'Confirm your Bengal Rising Briefings subscription',
-      text: `Confirm your subscription: ${confirmationUrl}\n\nYou can unsubscribe at any time: ${unsubscribeUrl}`,
-      html: `<p>Confirm your Bengal Rising Briefings subscription:</p><p><a href="${confirmationUrl}">Confirm subscription</a></p><p><a href="${unsubscribeUrl}">Unsubscribe</a></p>`,
+      text: `Review and confirm your subscription: ${confirmationUrl}\n\nTo unsubscribe, open this link and confirm the request: ${unsubscribeUrl}`,
+      html: `<p>Review and confirm your Bengal Rising Briefings subscription:</p><p><a href="${confirmationUrl}">Review subscription confirmation</a></p><p>To unsubscribe, open this link and confirm the request:</p><p><a href="${unsubscribeUrl}">Review unsubscribe request</a></p>`,
     });
   } catch {
     throw new AppError(503, 'email_delivery_unavailable', 'Newsletter email delivery is temporarily unavailable.');

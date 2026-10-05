@@ -16,27 +16,31 @@ export async function createNewsletterSubscription(input: NewsletterSubscription
   const source = input.source?.trim() || 'website';
   const confirmationToken = randomBytes(32).toString('base64url');
   const confirmationTokenHash = createHash('sha256').update(confirmationToken).digest('hex');
+  const unsubscribeToken = randomBytes(32).toString('base64url');
+  const unsubscribeTokenHash = createHash('sha256').update(unsubscribeToken).digest('hex');
 
   try {
     const result = await db.query<{ id: string; email: string; status: string; confirmed_at: string | null }>(`
-      INSERT INTO newsletter_subscriptions (email, status, source, consented_at, confirmed_at, confirmation_token_hash, created_at, updated_at)
-      VALUES ($1, 'pending', $2, NOW(), NULL, $3, NOW(), NOW())
+      INSERT INTO newsletter_subscriptions (email, status, source, consented_at, confirmed_at, confirmation_token_hash, confirmation_token_expires_at, unsubscribe_token_hash, created_at, updated_at)
+      VALUES ($1, 'pending', $2, NOW(), NULL, $3, NOW() + INTERVAL '24 hours', $4, NOW(), NOW())
       ON CONFLICT (lower(email)) DO UPDATE SET
         status = EXCLUDED.status,
         source = EXCLUDED.source,
         confirmation_token_hash = EXCLUDED.confirmation_token_hash,
+        confirmation_token_expires_at = EXCLUDED.confirmation_token_expires_at,
+        unsubscribe_token_hash = EXCLUDED.unsubscribe_token_hash,
         unsubscribed_at = NULL,
         consented_at = NOW(),
         updated_at = NOW()
       WHERE newsletter_subscriptions.status <> 'active'
-      RETURNING id, email, status, confirmed_at, confirmation_token_hash
-    `, [email, source, confirmationTokenHash]);
+      RETURNING id, email, status, confirmed_at
+    `, [email, source, confirmationTokenHash, unsubscribeTokenHash]);
 
     if (!result.rows[0]) {
       throw new AppError(409, 'newsletter_already_registered', 'This email is already subscribed.');
     }
 
-    return { ...result.rows[0], confirmationToken };
+    return { ...result.rows[0], confirmationToken, unsubscribeToken };
   } catch (error) {
     if (error instanceof AppError) {
       throw error;
@@ -57,13 +61,32 @@ function hashNewsletterToken(token: string): string {
 export async function confirmNewsletterSubscription(token: string) {
   const result = await db.query<{ id: string }>(
     `UPDATE newsletter_subscriptions
-     SET status = 'active', confirmed_at = COALESCE(confirmed_at, NOW()), unsubscribed_at = NULL, updated_at = NOW()
+     SET status = 'active', confirmed_at = COALESCE(confirmed_at, NOW()), unsubscribed_at = NULL,
+         confirmation_token_hash = NULL, confirmation_token_expires_at = NULL, updated_at = NOW()
      WHERE confirmation_token_hash = $1
-       AND status IN ('pending', 'active')
+       AND status = 'pending'
+       AND confirmation_token_expires_at > NOW()
      RETURNING id`,
     [hashNewsletterToken(token)],
   );
   if (!result.rows[0]) throw new AppError(400, 'invalid_subscription_token', 'This subscription link is invalid or expired.');
+}
+
+export async function resendPendingNewsletterConfirmation(emailInput: string) {
+  const email = emailSchema.parse(emailInput);
+  const confirmationToken = randomBytes(32).toString('base64url');
+  const unsubscribeToken = randomBytes(32).toString('base64url');
+  const result = await db.query<{ email: string }>(
+    `UPDATE newsletter_subscriptions
+     SET confirmation_token_hash = $1,
+         confirmation_token_expires_at = NOW() + INTERVAL '24 hours',
+         unsubscribe_token_hash = $2,
+         updated_at = NOW()
+     WHERE lower(email) = lower($3) AND status = 'pending'
+     RETURNING email`,
+    [createHash('sha256').update(confirmationToken).digest('hex'), createHash('sha256').update(unsubscribeToken).digest('hex'), email],
+  );
+  return result.rows[0] ? { email: result.rows[0].email, confirmationToken, unsubscribeToken } : null;
 }
 
 export async function discardNewsletterSubscription(token: string): Promise<void> {
@@ -77,13 +100,14 @@ export async function discardNewsletterSubscription(token: string): Promise<void
 export async function unsubscribeNewsletter(token: string) {
   const result = await db.query<{ id: string }>(
     `UPDATE newsletter_subscriptions
-     SET status = 'unsubscribed', unsubscribed_at = NOW(), updated_at = NOW()
-     WHERE confirmation_token_hash = $1
+     SET status = 'unsubscribed', unsubscribed_at = NOW(), updated_at = NOW(),
+         confirmation_token_hash = NULL, confirmation_token_expires_at = NULL, unsubscribe_token_hash = NULL
+     WHERE (unsubscribe_token_hash = $1 OR (unsubscribe_token_hash IS NULL AND confirmation_token_hash = $1 AND status = 'active'))
        AND status <> 'unsubscribed'
      RETURNING id`,
     [hashNewsletterToken(token)],
   );
-  if (!result.rows[0]) throw new AppError(400, 'invalid_subscription_token', 'This unsubscribe link is invalid or expired.');
+  if (!result.rows[0]) throw new AppError(400, 'invalid_subscription_token', 'This subscription link is invalid, expired, or already used.');
 }
 
 export async function processNewsletterDeliveryEvent(event: 'delivered' | 'bounce' | 'complaint', email: string) {
