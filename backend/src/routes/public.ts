@@ -57,9 +57,9 @@ const knowledgeQuestionLimiter = createRateLimiter({
 const contentSearchLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 40, message: 'Too many search requests. Please wait before trying again.' });
 const translationLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 30, message: 'Too many translation requests. Please wait before trying again.' });
 const translationProviders = [
-  'https://translate.argosopentech.com/translate',
-  'https://libretranslate.de/translate',
-  'https://translate.mentality.rip/translate',
+  'https://translate.terraprint.co/translate',
+  'https://trans.zillyhuhn.com/translate',
+  'https://translate.foxhaven.cyou/translate',
 ];
 
 const contactLimiter = createRateLimiter({
