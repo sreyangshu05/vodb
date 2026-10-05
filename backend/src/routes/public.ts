@@ -78,6 +78,7 @@ router.post('/translate', translationLimiter, async (req, res, next) => {
   try {
     const { texts, target } = translationSchema.parse(req.body);
     const indexesToTranslate = texts.map((text, index) => text.trim() ? index : -1).filter((index) => index >= 0);
+    if (!indexesToTranslate.length) return res.json({ translatedTexts: texts });
     const upstream = await fetch('https://libretranslate.com/translate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -96,7 +97,9 @@ router.post('/translate', translationLimiter, async (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
     res.json({ translatedTexts });
   } catch (error) {
-    if (error instanceof z.ZodError) return next(error);
+    if (error instanceof z.ZodError) {
+      return res.status(422).json({ error: 'invalid_translation_request', message: 'The translation request is invalid or contains too much text.' });
+    }
     res.status(502).json({ error: 'translation_unavailable', message: 'Translation service is temporarily unavailable.' });
   }
 });
