@@ -56,6 +56,11 @@ const knowledgeQuestionLimiter = createRateLimiter({
 
 const contentSearchLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 40, message: 'Too many search requests. Please wait before trying again.' });
 const translationLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 30, message: 'Too many translation requests. Please wait before trying again.' });
+const translationProviders = [
+  'https://translate.argosopentech.com/translate',
+  'https://libretranslate.de/translate',
+  'https://translate.mentality.rip/translate',
+];
 
 const contactLimiter = createRateLimiter({
   windowMs: env.CONTACT_RATE_LIMIT_WINDOW_MS,
@@ -79,21 +84,38 @@ router.post('/translate', translationLimiter, async (req, res, next) => {
     const { texts, target } = translationSchema.parse(req.body);
     const indexesToTranslate = texts.map((text, index) => text.trim() ? index : -1).filter((index) => index >= 0);
     if (!indexesToTranslate.length) return res.json({ translatedTexts: texts });
-    const upstream = await fetch('https://libretranslate.com/translate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ q: indexesToTranslate.map((index) => texts[index]), source: 'auto', target, format: 'text' }),
-      signal: AbortSignal.timeout(60000),
-    });
-    if (!upstream.ok) throw new Error('Translation provider returned an error');
-    const result: unknown = await upstream.json();
-    if (!result || typeof result !== 'object' || !('translatedText' in result)) throw new Error('Translation provider returned an invalid response');
-    const translatedValues = Array.isArray(result.translatedText) ? result.translatedText : [result.translatedText];
-    if (translatedValues.length !== indexesToTranslate.length || translatedValues.some((text) => typeof text !== 'string')) {
-      throw new Error('Translation provider returned an invalid response');
+    const requestBody = JSON.stringify({ q: indexesToTranslate.map((index) => texts[index]), source: 'auto', target: target === 'zh-CN' ? 'zh' : target, format: 'text' });
+    let translatedValues: string[] | null = null;
+    const providerStatuses: number[] = [];
+    for (const endpoint of translationProviders) {
+      try {
+        const upstream = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: requestBody,
+          signal: AbortSignal.timeout(12000),
+        });
+        if (!upstream.ok) {
+          providerStatuses.push(upstream.status);
+          continue;
+        }
+        const result: unknown = await upstream.json();
+        if (!result || typeof result !== 'object' || !('translatedText' in result)) continue;
+        const values = Array.isArray(result.translatedText) ? result.translatedText : [result.translatedText];
+        if (values.length === indexesToTranslate.length && values.every((text) => typeof text === 'string')) {
+          translatedValues = values as string[];
+          break;
+        }
+      } catch {
+        // Try the next public instance when a demo is offline or times out.
+      }
+    }
+    if (!translatedValues) {
+      logger.warn('translation_providers_unavailable', { statuses: providerStatuses });
+      return res.status(502).json({ error: 'translation_unavailable', message: 'Translation is temporarily unavailable. Please try again later.' });
     }
     const translatedTexts = [...texts];
-    indexesToTranslate.forEach((originalIndex, index) => { translatedTexts[originalIndex] = translatedValues[index] as string; });
+    indexesToTranslate.forEach((originalIndex, index) => { translatedTexts[originalIndex] = translatedValues[index]; });
     res.setHeader('Cache-Control', 'no-store');
     res.json({ translatedTexts });
   } catch (error) {
