@@ -55,13 +55,6 @@ const knowledgeQuestionLimiter = createRateLimiter({
 });
 
 const contentSearchLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 40, message: 'Too many search requests. Please wait before trying again.' });
-const translationLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 30, message: 'Too many translation requests. Please wait before trying again.' });
-const translationProviders = [
-  'https://translate.terraprint.co/translate',
-  'https://trans.zillyhuhn.com/translate',
-  'https://translate.foxhaven.cyou/translate',
-];
-
 const contactLimiter = createRateLimiter({
   windowMs: env.CONTACT_RATE_LIMIT_WINDOW_MS,
   max: env.CONTACT_RATE_LIMIT_MAX_REQUESTS,
@@ -72,72 +65,6 @@ router.use(publicLimiter);
 
 router.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'voice-of-digi-bengal-backend', timestamp: new Date().toISOString() });
-});
-
-const translationSchema = z.object({
-  texts: z.array(z.string().max(5000)).min(1).max(100),
-  target: z.enum(['bn', 'fr', 'es', 'pt', 'ru', 'de', 'zh-CN', 'nl', 'pl', 'fa', 'ar', 'he']),
-});
-
-router.post('/translate', translationLimiter, async (req, res, next) => {
-  try {
-    const { texts, target } = translationSchema.parse(req.body);
-    const indexesToTranslate = texts.map((text, index) => text.trim() ? index : -1).filter((index) => index >= 0);
-    if (!indexesToTranslate.length) return res.json({ translatedTexts: texts });
-    const requestBody = JSON.stringify({ q: indexesToTranslate.map((index) => texts[index]), source: 'auto', target: target === 'zh-CN' ? 'zh' : target, format: 'text' });
-    let translatedValues: string[] | null = null;
-    const providerFailures: Array<{ host: string; status?: number; reason: string; code?: string }> = [];
-    for (const endpoint of translationProviders) {
-      const host = new URL(endpoint).hostname;
-      try {
-        const upstream = await fetch(endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: requestBody,
-          signal: AbortSignal.timeout(18000),
-        });
-        if (!upstream.ok) {
-          providerFailures.push({ host, status: upstream.status, reason: 'http_error' });
-          continue;
-        }
-        let result: unknown;
-        try {
-          result = await upstream.json();
-        } catch {
-          providerFailures.push({ host, status: upstream.status, reason: 'invalid_json' });
-          continue;
-        }
-        if (!result || typeof result !== 'object' || !('translatedText' in result)) {
-          providerFailures.push({ host, status: upstream.status, reason: 'missing_translation' });
-          continue;
-        }
-        const values = Array.isArray(result.translatedText) ? result.translatedText : [result.translatedText];
-        if (values.length === indexesToTranslate.length && values.every((text) => typeof text === 'string')) {
-          translatedValues = values as string[];
-          break;
-        }
-        providerFailures.push({ host, status: upstream.status, reason: 'unexpected_translation_shape' });
-      } catch (error) {
-        const code = error && typeof error === 'object' && 'cause' in error && error.cause && typeof error.cause === 'object' && 'code' in error.cause && typeof error.cause.code === 'string'
-          ? error.cause.code
-          : undefined;
-        providerFailures.push({ host, reason: error instanceof Error ? error.name : 'network_error', ...(code ? { code } : {}) });
-      }
-    }
-    if (!translatedValues) {
-      logger.warn('translation_providers_unavailable', { providers: providerFailures });
-      return res.status(502).json({ error: 'translation_unavailable', message: 'Translation is temporarily unavailable. Please try again later.' });
-    }
-    const translatedTexts = [...texts];
-    indexesToTranslate.forEach((originalIndex, index) => { translatedTexts[originalIndex] = translatedValues[index]; });
-    res.setHeader('Cache-Control', 'no-store');
-    res.json({ translatedTexts });
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      return res.status(422).json({ error: 'invalid_translation_request', message: 'The translation request is invalid or contains too much text.' });
-    }
-    res.status(502).json({ error: 'translation_unavailable', message: 'Translation service is temporarily unavailable.' });
-  }
 });
 
 router.get('/blogs', async (req, res, next) => {
