@@ -14,6 +14,7 @@ The implemented schema covers only the durable domain evidence documented in the
 - `users`
 - `protected_media` and `protected_media_access_log`
 - `password_reset_otps`
+- `reader_email_verification_otps` and verified reader email state
 - `media_assets` (PostgreSQL `BYTEA` image data for editorial images)
 
 The database intentionally does not add tenanting, Redis, Elasticsearch, Kafka, search clusters, multi-region replication, or object-storage metadata because the repository evidence does not require them.
@@ -71,10 +72,26 @@ Migrations are intentionally ordered and plain SQL:
 - `migrations/008_add_content_query_indexes.sql`
 - `migrations/009_create_media_assets.sql`
 - `migrations/010_add_source_paths_for_site_images.sql`
+- `migrations/011_create_reader_account_features.sql`
+- `migrations/012_add_published_search_indexes.sql`
+- `migrations/013_harden_newsletter_action_tokens.sql`
+- `migrations/014_require_verified_reader_email.sql`
 
 Homepage image bytes are held in PostgreSQL `BYTEA`. Import requires adequate database storage and backup capacity (about 138 MiB for the current homepage image manifest).
 
-These are designed to be replay-safe on the same database and reviewable in source control. Docker init scripts run automatically only when the database volume is first created; use the explicit commands above or the deployment migration job for an existing volume.
+These are designed to be replay-safe on the same database and reviewable in source control. Docker init scripts run automatically only when the database volume is first created. For an existing database, configure `DIRECT_DATABASE_URL` and run the ordered migration runner from the repository root:
+
+```powershell
+npm.cmd --prefix backend run db:migrate
+```
+
+The runner applies every pending numbered migration and records checksums in `app_schema_migrations`. Use a direct connection URL for migrations; the pooled `DATABASE_URL` is for the running API. Test pending migrations on a Neon branch before applying them to production.
+
+To apply just one migration after confirming its prerequisites are already recorded, pass its exact filename:
+
+```powershell
+npm.cmd --prefix backend run db:migrate -- --only 011_create_reader_account_features.sql
+```
 
 ## Documentation alignment
 

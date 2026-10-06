@@ -4,8 +4,8 @@ import { createRateLimiter } from '../middleware/rateLimit.js';
 import { requireAuth } from '../middleware/auth.js';
 import { env } from '../config/env.js';
 import { AppError } from '../utils/errors.js';
-import { authenticateGoogleUser, authenticateUser, createPasswordReset, discardPasswordReset, registerUser, resetPassword, signToken } from '../services/authService.js';
-import { sendPasswordResetOtp } from '../services/mailService.js';
+import { authenticateGoogleUser, authenticateUser, createPasswordReset, discardPasswordReset, issueReaderEmailVerification, registerUser, resetPassword, signToken, verifyReaderEmail, verifySignupChallenge } from '../services/authService.js';
+import { sendPasswordResetOtp, sendReaderEmailVerificationOtp } from '../services/mailService.js';
 import { db } from '../lib/db.js';
 import { recordAuditEvent } from '../services/auditService.js';
 import { logger } from '../utils/logger.js';
@@ -17,6 +17,7 @@ const credentialsSchema = z.object({
 });
 const registrationSchema = credentialsSchema.extend({
   name: z.string().trim().min(2).max(120),
+  turnstileToken: z.string().max(2048).optional(),
 });
 const resetRequestSchema = z.object({ email: z.string().trim().email().max(320) });
 const resetPasswordSchema = z.object({
@@ -25,6 +26,7 @@ const resetPasswordSchema = z.object({
   password: z.string().min(8).max(128),
 });
 const googleAuthSchema = z.object({ idToken: z.string().min(1).max(4096) });
+const verifyEmailSchema = z.object({ email: z.string().trim().email().max(320), code: z.string().regex(/^\d{6}$/) });
 const profileSchema = z.object({ name: z.string().trim().min(2).max(120) });
 const deleteAccountSchema = z.object({ confirmation: z.literal('DELETE') });
 const readerTopics = ['history', 'culture', 'language', 'research', 'arts', 'places', 'economy', 'science', 'events', 'education'] as const;
@@ -49,19 +51,56 @@ const authLimiter = createRateLimiter({
   max: env.ADMIN_LOGIN_RATE_LIMIT_MAX_REQUESTS,
   message: 'Too many authentication attempts. Please retry later.',
 });
+const signupLimiter = createRateLimiter({
+  windowMs: env.SIGNUP_RATE_LIMIT_WINDOW_MS,
+  max: env.SIGNUP_RATE_LIMIT_MAX_REQUESTS,
+  message: 'Too many signup attempts from this network. Please try again later.',
+});
 
-router.post('/register', authLimiter, async (req, res, next) => {
+router.post('/register', authLimiter, signupLimiter, async (req, res, next) => {
   try {
     const payload = registrationSchema.parse(req.body ?? {});
-    const user = await registerUser(payload.name, payload.email, payload.password);
-    res.status(201).json({ token: signToken(user), user });
+    await verifySignupChallenge(payload.turnstileToken, req.ip);
+    await registerUser(payload.name, payload.email, payload.password);
+    const verification = await issueReaderEmailVerification(payload.email);
+    if (!verification) throw new AppError(503, 'verification_unavailable', 'Could not start email verification. Please try again.');
+    await sendReaderEmailVerificationOtp(verification.email, verification.code);
+    res.status(202).json({ emailVerificationRequired: true, message: 'Enter the six-digit code sent to your email address.' });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return next(new AppError(422, 'invalid_payload', 'Name, email, and a valid password are required.', { issues: error.issues }));
     }
     if (error instanceof AppError && error.error === 'account_already_exists') {
+      const verification = await issueReaderEmailVerification(String((req.body as { email?: unknown } | undefined)?.email ?? ''));
+      if (verification) {
+        await sendReaderEmailVerificationOtp(verification.email, verification.code);
+        return res.status(202).json({ emailVerificationRequired: true, message: 'Enter the six-digit code sent to your email address.' });
+      }
       return next(new AppError(409, 'account_unavailable', 'We could not create an account with those details. Try signing in or resetting your password.'));
     }
+    next(error);
+  }
+});
+
+router.post('/verify-email', authLimiter, async (req, res, next) => {
+  try {
+    const payload = verifyEmailSchema.parse(req.body ?? {});
+    const user = await verifyReaderEmail(payload.email, payload.code);
+    res.json({ token: signToken(user), user });
+  } catch (error) {
+    if (error instanceof z.ZodError) return next(new AppError(422, 'invalid_payload', 'Enter a valid email and six-digit verification code.'));
+    next(error);
+  }
+});
+
+router.post('/resend-verification', authLimiter, async (req, res, next) => {
+  try {
+    const payload = resetRequestSchema.parse(req.body ?? {});
+    const verification = await issueReaderEmailVerification(payload.email);
+    if (verification) await sendReaderEmailVerificationOtp(verification.email, verification.code);
+    res.status(202).json({ message: 'If this address has an unverified account, a new code has been sent.' });
+  } catch (error) {
+    if (error instanceof z.ZodError) return next(new AppError(422, 'invalid_payload', 'Please provide a valid email address.'));
     next(error);
   }
 });

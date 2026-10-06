@@ -51,3 +51,20 @@ export async function sendNewsletterConfirmation(email: string, confirmationToke
     throw new AppError(503, 'email_delivery_unavailable', 'Newsletter email delivery is temporarily unavailable.');
   }
 }
+
+export async function sendReaderEmailVerificationOtp(email: string, code: string): Promise<void> {
+  if (!transporter || !env.SMTP_FROM) {
+    throw new AppError(503, 'email_delivery_unavailable', 'Email verification is temporarily unavailable. Please try again later.');
+  }
+  try {
+    await transporter.sendMail({
+      from: env.SMTP_FROM,
+      to: email,
+      subject: 'Verify your Voice Of Digi Bengal account',
+      text: `Your email verification code is ${code}. It expires in 10 minutes. If you did not request this, you can ignore this email.`,
+      html: `<p>Your Voice Of Digi Bengal email verification code is:</p><p style="font-size:24px;font-weight:700;letter-spacing:4px">${code}</p><p>It expires in 10 minutes. If you did not request this, you can ignore this email.</p>`,
+    });
+  } catch {
+    throw new AppError(503, 'email_delivery_unavailable', 'Email verification is temporarily unavailable. Please try again later.');
+  }
+}

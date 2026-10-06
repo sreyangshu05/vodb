@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import { assertProductionDatabaseTls } from './databaseTls.js';
 
 // Resolve the backend environment file from this module instead of the current
 // shell directory. This keeps GOOGLE_CLIENT_ID and the other backend settings
@@ -37,6 +38,9 @@ const envSchema = z.object({
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
   FRONTEND_URL: z.string().url().default('http://localhost:5173'),
   OBSERVABILITY_TOKEN: z.preprocess((value) => value === '' ? undefined : value, z.string().min(16).optional()),
+  NEON_AI_GATEWAY_BASE_URL: z.preprocess((value) => value === '' ? undefined : value, z.string().url().optional()),
+  NEON_AI_GATEWAY_TOKEN: z.preprocess((value) => value === '' ? undefined : value, z.string().min(16).optional()),
+  NEON_AI_GATEWAY_MODEL: z.string().trim().min(1).optional(),
   ADMIN_EMAIL: z.string().default('admin@voiceofdigi.org'),
   ADMIN_EMAILS: z.string().default(''),
   ADMIN_PASSWORD: z.string().default('admin123'),
@@ -44,6 +48,9 @@ const envSchema = z.object({
   ADMIN_LOGIN_RATE_LIMIT_WINDOW_MS: z.coerce.number().default(60000),
   ADMIN_LOGIN_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().default(5),
   GOOGLE_CLIENT_ID: z.string().optional(),
+  TURNSTILE_SECRET_KEY: z.preprocess((value) => value === '' ? undefined : value, z.string().min(1).optional()),
+  SIGNUP_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(900000),
+  SIGNUP_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(5),
   SMTP_HOST: z.string().optional(),
   SMTP_PORT: z.coerce.number().int().positive().default(587),
   SMTP_SECURE: booleanFromEnv.default(false),
@@ -84,8 +91,14 @@ if (env.NODE_ENV === 'production') {
     throw new Error('DATABASE_URL or a remote POSTGRES_HOST must be configured in production.');
   }
 
+  assertProductionDatabaseTls(env.DATABASE_URL, env.POSTGRES_SSL);
+
   if (!env.GOOGLE_CLIENT_ID) {
     throw new Error('GOOGLE_CLIENT_ID must be configured in production.');
+  }
+
+  if (!env.TURNSTILE_SECRET_KEY) {
+    throw new Error('TURNSTILE_SECRET_KEY must be configured in production.');
   }
 
   if (!env.SMTP_HOST || !env.SMTP_USER || !env.SMTP_PASSWORD || !env.SMTP_FROM) {
@@ -98,6 +111,10 @@ if (env.NODE_ENV === 'production') {
 
   if (!env.OBSERVABILITY_TOKEN) {
     throw new Error('OBSERVABILITY_TOKEN must be configured in production.');
+  }
+
+  if (env.NEON_AI_GATEWAY_BASE_URL && !env.NEON_AI_GATEWAY_BASE_URL.startsWith('https://')) {
+    throw new Error('NEON_AI_GATEWAY_BASE_URL must use HTTPS in production.');
   }
 
   const configuredOrigins = env.CORS_ORIGIN.split(',').map((origin) => origin.trim().replace(/\/$/, '')).filter(Boolean);

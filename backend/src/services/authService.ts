@@ -12,6 +12,36 @@ const scrypt = promisify(scryptCallback);
 const PASSWORD_KEY_LENGTH = 64;
 const googleClient = new OAuth2Client();
 
+export async function verifySignupChallenge(token: string | undefined, remoteIp?: string): Promise<void> {
+  if (!env.TURNSTILE_SECRET_KEY && env.NODE_ENV !== 'production') return;
+  if (!token || token.length > 2048 || !env.TURNSTILE_SECRET_KEY) {
+    throw new AppError(400, 'signup_challenge_required', 'Complete the security check before creating an account.');
+  }
+
+  let response: Response;
+  try {
+    response = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ secret: env.TURNSTILE_SECRET_KEY, response: token, ...(remoteIp ? { remoteip: remoteIp } : {}) }),
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch {
+    throw new AppError(503, 'signup_challenge_unavailable', 'The security check is temporarily unavailable. Please try again.');
+  }
+
+  if (!response.ok) throw new AppError(503, 'signup_challenge_unavailable', 'The security check is temporarily unavailable. Please try again.');
+  let result: unknown;
+  try {
+    result = await response.json();
+  } catch {
+    throw new AppError(503, 'signup_challenge_unavailable', 'The security check is temporarily unavailable. Please try again.');
+  }
+  if (!result || typeof result !== 'object' || !('success' in result) || result.success !== true || !('action' in result) || result.action !== 'signup') {
+    throw new AppError(400, 'signup_challenge_failed', 'The security check expired or could not be verified. Please complete it again.');
+  }
+}
+
 type DecodedGoogleClaims = {
   aud?: string | string[];
   iss?: string;
@@ -90,8 +120,8 @@ export async function registerUser(name: string, email: string, password: string
   const passwordHash = await hashPassword(password);
   try {
     const result = await db.query<{ id: string; name: string; email: string; role: AuthUser['role'] }>(
-      `INSERT INTO users (name, email, password_hash)
-       VALUES ($1, $2, $3)
+      `INSERT INTO users (name, email, password_hash, email_verified)
+       VALUES ($1, $2, $3, false)
        RETURNING id, name, email, role`,
       [name.trim(), normalizedEmail, passwordHash],
     );
@@ -104,15 +134,54 @@ export async function registerUser(name: string, email: string, password: string
   }
 }
 
+export async function issueReaderEmailVerification(email: string): Promise<{ email: string; code: string } | null> {
+  const normalizedEmail = email.trim().toLowerCase();
+  const userResult = await db.query<{ id: string; email: string; email_verified: boolean }>(
+    'SELECT id, email, email_verified FROM users WHERE lower(email) = lower($1) LIMIT 1', [normalizedEmail],
+  );
+  const user = userResult.rows[0];
+  if (!user || user.email_verified) return null;
+  const code = String(randomInt(100000, 1000000));
+  await db.query(
+    `INSERT INTO reader_email_verification_otps (user_id, code_hash, expires_at)
+     VALUES ($1, $2, now() + interval '10 minutes')
+     ON CONFLICT (user_id) DO UPDATE SET code_hash = EXCLUDED.code_hash, expires_at = EXCLUDED.expires_at, created_at = now()`,
+    [user.id, hashResetCode(code)],
+  );
+  return { email: user.email, code };
+}
+
+export async function verifyReaderEmail(email: string, code: string): Promise<AuthUser> {
+  const normalizedEmail = email.trim().toLowerCase();
+  const result = await db.query<AuthUser>(
+    `WITH consumed_code AS (
+       DELETE FROM reader_email_verification_otps otp
+       USING users u
+       WHERE otp.user_id = u.id AND lower(u.email) = lower($1)
+         AND otp.code_hash = $2 AND otp.expires_at > now()
+       RETURNING otp.user_id
+     )
+     UPDATE users SET email_verified = true, updated_at = now()
+     WHERE id IN (SELECT user_id FROM consumed_code)
+     RETURNING id, name, email, role`,
+    [normalizedEmail, hashResetCode(code)],
+  );
+  if (!result.rows[0]) {
+    throw new AppError(400, 'invalid_or_expired_verification_code', 'That verification code is invalid or has expired. Request a new code and try again.');
+  }
+  return result.rows[0];
+}
+
 export async function authenticateUser(email: string, password: string): Promise<AuthUser> {
-  const result = await db.query<{ id: string; name: string; email: string; role: AuthUser['role']; password_hash: string }>(
-    `SELECT id, name, email, role, password_hash FROM users WHERE lower(email) = lower($1) LIMIT 1`,
+  const result = await db.query<{ id: string; name: string; email: string; role: AuthUser['role']; password_hash: string; email_verified: boolean }>(
+    `SELECT id, name, email, role, password_hash, email_verified FROM users WHERE lower(email) = lower($1) LIMIT 1`,
     [email.trim()],
   );
   const user = result.rows[0];
   if (!user || !(await verifyPassword(password, user.password_hash))) {
     throw new AppError(401, 'invalid_credentials', 'Email or password is incorrect.');
   }
+  if (!user.email_verified) throw new AppError(403, 'email_not_verified', 'Verify your email address before signing in. Check your inbox for the code or request a new one.');
   return { id: user.id, name: user.name, email: user.email, role: user.role };
 }
 
@@ -177,7 +246,7 @@ export async function authenticateGoogleUser(idToken: string): Promise<AuthUser>
   if (existing.rows[0]) {
     const user = existing.rows[0];
     await db.query(
-      `UPDATE users SET google_subject = $1, auth_provider = 'google', updated_at = now()
+      `UPDATE users SET google_subject = $1, auth_provider = 'google', email_verified = true, updated_at = now()
        WHERE id = $2`,
       [payload.sub, user.id],
     );
