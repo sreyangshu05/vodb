@@ -13,8 +13,12 @@ BEGIN
   ASSERT (EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'media_assets')), 'media_assets table missing';
   ASSERT (EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'media_assets' AND column_name = 'source_path')), 'media_assets.source_path column missing';
   ASSERT (EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'password_reset_otps')), 'password_reset_otps table missing';
+  ASSERT (EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'rate_limit_buckets')), 'rate_limit_buckets table missing';
   ASSERT (EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'blog_posts' AND column_name = 'moderation_status')), 'blog_posts.moderation_status column missing';
   ASSERT (EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'events' AND column_name = 'moderation_status')), 'events.moderation_status column missing';
+  ASSERT (EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'events' AND column_name = 'all_day')), 'events.all_day column missing';
+  ASSERT (EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'token_version')), 'users.token_version column missing';
+  ASSERT (EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'contact_inquiries' AND column_name = 'idempotency_key')), 'contact_inquiries.idempotency_key column missing';
 END $$;
 
 DO $$

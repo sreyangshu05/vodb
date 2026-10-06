@@ -7,7 +7,21 @@ import { assertProductionDatabaseTls } from './databaseTls.js';
 // Resolve the backend environment file from this module instead of the current
 // shell directory. This keeps GOOGLE_CLIENT_ID and the other backend settings
 // loaded when the server is started from the repository root.
-dotenv.config({ path: resolve(dirname(fileURLToPath(import.meta.url)), '../../.env') });
+dotenv.config({
+  path: resolve(dirname(fileURLToPath(import.meta.url)), '../../.env'),
+  override: false,
+});
+
+if (process.env.NODE_ENV === 'test' && process.env.BACKEND_TEST_DATABASE_MODE === 'unavailable') {
+  delete process.env.DATABASE_URL;
+  delete process.env.DIRECT_DATABASE_URL;
+  process.env.POSTGRES_HOST = '127.0.0.1';
+  process.env.POSTGRES_PORT = '59999';
+  delete process.env.ADMIN_PASSWORD_HASH;
+  process.env.ADMIN_EMAIL = 'admin@voiceofdigi.org';
+  process.env.ADMIN_EMAILS = '';
+  process.env.ADMIN_PASSWORD = 'admin123';
+}
 
 const booleanFromEnv = z.preprocess((value) => {
   if (typeof value === 'string') {
@@ -20,6 +34,7 @@ const envSchema = z.object({
   PORT: z.coerce.number().default(4000),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   JWT_SECRET: z.string().min(16).default('development-secret-change-me'),
+  OTP_HASH_SECRET: z.string().min(32).default('development-otp-hmac-secret-change-me'),
   JWT_EXPIRES_IN: z.string().default('1h'),
   DATABASE_URL: z.preprocess((value) => value === '' ? undefined : value, z.string().url().optional()),
   POSTGRES_HOST: z.string().default('localhost'),
@@ -83,6 +98,15 @@ if (env.NODE_ENV === 'production') {
     throw new Error('JWT_SECRET must be at least 32 characters in production.');
   }
 
+  if (
+    env.OTP_HASH_SECRET.length < 32 ||
+    env.OTP_HASH_SECRET === 'development-otp-hmac-secret-change-me' ||
+    env.OTP_HASH_SECRET === env.JWT_SECRET ||
+    env.OTP_HASH_SECRET === env.MEDIA_TOKEN_SECRET
+  ) {
+    throw new Error('OTP_HASH_SECRET must be a dedicated random production value of at least 32 characters.');
+  }
+
   if (env.MEDIA_TOKEN_SECRET.length < 32 || env.MEDIA_TOKEN_SECRET === 'development-media-secret-change-me') {
     throw new Error('MEDIA_TOKEN_SECRET must be a new, random production value of at least 32 characters.');
   }
@@ -103,6 +127,10 @@ if (env.NODE_ENV === 'production') {
 
   if (!env.SMTP_HOST || !env.SMTP_USER || !env.SMTP_PASSWORD || !env.SMTP_FROM) {
     throw new Error('SMTP_HOST, SMTP_USER, SMTP_PASSWORD, and SMTP_FROM must be configured in production.');
+  }
+
+  if (env.SMTP_SECURE ? env.SMTP_PORT !== 465 : env.SMTP_PORT !== 587) {
+    throw new Error('Production SMTP must use implicit TLS on port 465 or STARTTLS on port 587.');
   }
 
   if (!env.NEWSLETTER_WEBHOOK_SECRET) {

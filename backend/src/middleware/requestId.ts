@@ -18,8 +18,9 @@ export function requestIdMiddleware(req: Request, res: Response, next: NextFunct
     metrics.requestCompleted(metricRequest.key, res.statusCode, metricRequest.startedAt);
     logger.info('request_completed', {
       requestId,
+      userId: req.user?.id,
       method: req.method,
-      path: req.path,
+      route: metricRequest.key,
       status: res.statusCode,
       durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
     });

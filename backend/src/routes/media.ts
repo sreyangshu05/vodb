@@ -4,12 +4,14 @@ import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { createMediaAccess, resolveMediaToken } from '../services/mediaService.js';
 import { AppError } from '../utils/errors.js';
 import { db } from '../lib/db.js';
+import sharp from 'sharp';
 
 const router = Router();
 const mediaId = z.string().uuid();
 const maxImageBytes = 5 * 1024 * 1024;
+const maxImagePixels = 25_000_000;
 
-router.post('/upload', requireAdmin, async (req, res, next) => {
+router.post('/upload', requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const { data, mimeType, fileName, altText } = req.body ?? {};
     if (typeof data !== 'string' || data.length > Math.ceil(maxImageBytes * 4 / 3) + 16) {
@@ -28,9 +30,30 @@ router.post('/upload', requireAdmin, async (req, res, next) => {
         : bytes.length >= 12 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP';
     if (!signatureValid) throw new AppError(422, 'invalid_image', 'Image content does not match its file type.');
     if (typeof altText !== 'undefined' && (typeof altText !== 'string' || altText.length > 500)) throw new AppError(422, 'invalid_alt_text', 'Alt text must be 500 characters or fewer.');
+    let normalizedBytes: Buffer;
+    try {
+      const decoder = sharp(bytes, { limitInputPixels: maxImagePixels, failOn: 'error' });
+      const metadata = await decoder.metadata();
+      const expectedFormat = match[1] === 'image/jpeg' ? 'jpeg' : match[1] === 'image/png' ? 'png' : 'webp';
+      if (metadata.format !== expectedFormat || !metadata.width || !metadata.height || metadata.width * metadata.height > maxImagePixels) {
+        throw new Error('Unsupported or oversized image dimensions.');
+      }
+      const normalized = sharp(bytes, { limitInputPixels: maxImagePixels, failOn: 'error' }).rotate();
+      normalizedBytes = match[1] === 'image/jpeg'
+        ? await normalized.jpeg({ quality: 88 }).toBuffer()
+        : match[1] === 'image/png'
+          ? await normalized.png({ compressionLevel: 9 }).toBuffer()
+          : await normalized.webp({ quality: 88 }).toBuffer();
+    } catch {
+      throw new AppError(422, 'invalid_image', 'Image could not be safely decoded. Upload a valid JPEG, PNG, or WebP under 25 megapixels.');
+    }
+    if (normalizedBytes.length > maxImageBytes) throw new AppError(413, 'image_too_large', 'Normalized image must be 5 MB or smaller.');
+    const originalName = typeof fileName === 'string'
+      ? fileName.replace(/\\/g, '/').split('/').pop()!.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 255) || 'image'
+      : 'image';
     const result = await db.query<{ id: string }>(
       'INSERT INTO media_assets (original_name, mime_type, byte_size, image_data, alt_text) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-      [typeof fileName === 'string' ? fileName.slice(0, 255) : 'image', match[1], bytes.length, bytes, altText ?? ''],
+      [originalName, match[1], normalizedBytes.length, normalizedBytes, typeof altText === 'string' ? altText.trim() : ''],
     );
     const id = result.rows[0]!.id;
     res.status(201).json({ id, url: `/api/v1/media/${id}`, mimeType: match[1], byteSize: bytes.length, altText: altText ?? '' });
@@ -53,6 +76,18 @@ router.get('/source', async (req, res, next) => {
   }
 });
 
+router.get('/stream', async (req, res, next) => {
+  try {
+    const token = req.get('x-media-access-token');
+    if (!token) throw new AppError(401, 'missing_media_token', 'A media access token is required.');
+    const { media } = await resolveMediaToken(token);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Content-Type', media.mime_type);
+    res.redirect(302, media.storage_url);
+  } catch (error) { next(error); }
+});
+
 router.get('/:id', async (req, res, next) => {
   try {
     const parsed = mediaId.safeParse(req.params.id);
@@ -67,7 +102,7 @@ router.get('/:id', async (req, res, next) => {
     );
     const image = result.rows[0];
     if (!image) throw new AppError(404, 'image_not_found', 'Published image not found.');
-    res.set({ 'Content-Type': image.mime_type, 'Content-Length': String(image.byte_size), 'Cache-Control': 'public, max-age=3600', 'X-Content-Type-Options': 'nosniff', 'Content-Disposition': 'inline' });
+    res.set({ 'Content-Type': image.mime_type, 'Content-Length': String(image.byte_size), 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Disposition': 'inline' });
     res.send(image.image_data);
   } catch (error) { next(error); }
 });
@@ -86,18 +121,6 @@ router.post('/:id/access', requireAuth, async (req, res, next) => {
       expiresAt: result.expiresAt,
       streamUrl: '/api/v1/media/stream',
     });
-  } catch (error) { next(error); }
-});
-
-router.get('/stream', async (req, res, next) => {
-  try {
-    const token = req.get('x-media-access-token');
-    if (!token) throw new AppError(401, 'missing_media_token', 'A media access token is required.');
-    const { media } = await resolveMediaToken(token);
-    res.setHeader('Cache-Control', 'private, no-store');
-    res.setHeader('Referrer-Policy', 'no-referrer');
-    res.setHeader('Content-Type', media.mime_type);
-    res.redirect(302, media.storage_url);
   } catch (error) { next(error); }
 });
 

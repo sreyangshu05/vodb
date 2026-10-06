@@ -1,0 +1,63 @@
+{
+  "projectType": "server",
+  "setup": [
+    {
+      "command": "npm",
+      "args": ["ci"]
+    }
+  ],
+  "assertions": [
+    {
+      "name": "backend-builds",
+      "kind": "process",
+      "command": "npm",
+      "args": ["run", "build"],
+      "verificationMethod": "exit-code",
+      "expected": "0",
+      "timeoutSeconds": 180
+    },
+    {
+      "name": "tests-pass",
+      "kind": "process",
+      "command": "npm",
+      "args": ["test"],
+      "verificationMethod": "test-results",
+      "expected": "0",
+      "timeoutSeconds": 300
+    },
+    {
+      "name": "health-endpoint-200",
+      "kind": "http-probe",
+      "startCommand": "npm",
+      "startArgs": ["run", "start"],
+      "env": {
+        "NODE_ENV": "development",
+        "PORT": "4100",
+        "DATABASE_URL": "",
+        "POSTGRES_HOST": "127.0.0.1",
+        "POSTGRES_PORT": "59999"
+      },
+      "url": "http://127.0.0.1:4100/api/v1/health",
+      "verificationMethod": "http-status",
+      "expected": "200",
+      "timeoutSeconds": 60
+    },
+    {
+      "name": "readiness-reports-database-outage",
+      "kind": "http-probe",
+      "startCommand": "npm",
+      "startArgs": ["run", "start"],
+      "env": {
+        "NODE_ENV": "development",
+        "PORT": "4101",
+        "DATABASE_URL": "",
+        "POSTGRES_HOST": "127.0.0.1",
+        "POSTGRES_PORT": "59999"
+      },
+      "url": "http://127.0.0.1:4101/api/v1/readiness",
+      "verificationMethod": "http-status",
+      "expected": "503",
+      "timeoutSeconds": 60
+    }
+  ]
+}

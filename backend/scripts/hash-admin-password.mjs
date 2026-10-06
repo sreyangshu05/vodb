@@ -1,7 +1,4 @@
-import { promisify } from 'node:util';
-import { randomBytes, scrypt as scryptCallback } from 'node:crypto';
-
-const scrypt = promisify(scryptCallback);
+import argon2 from 'argon2';
 const input = process.stdin;
 
 if (!input.isTTY || typeof input.setRawMode !== 'function') {
@@ -33,9 +30,13 @@ input.on('data', async (chunk) => {
       input.setRawMode(false);
       input.pause();
       process.stdout.write('\n');
-      const salt = randomBytes(16);
-      const derivedKey = await scrypt(password, salt, 64);
-      process.stdout.write(`ADMIN_PASSWORD_HASH=scrypt$${salt.toString('base64')}$${derivedKey.toString('base64')}\n`);
+      const hash = await argon2.hash(password, {
+        type: argon2.argon2id,
+        memoryCost: 65536,
+        timeCost: 3,
+        parallelism: 1,
+      });
+      process.stdout.write(`ADMIN_PASSWORD_HASH=${hash}\n`);
       password = '';
       return;
     }

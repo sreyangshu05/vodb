@@ -12,7 +12,11 @@ function isDbUnavailable(error: unknown): boolean {
 export async function listPublishedBlogs(limit = 50, offset = 0) {
   try {
     const result = await db.query<BlogRecord>(`
-      SELECT b.*, CASE WHEN m.id IS NULL THEN NULL ELSE '/api/v1/media/' || m.id::text END AS image_url,
+      SELECT b.id, b.title, b.slug, LEFT(b.content, 320) AS content,
+             b.meta_title, b.meta_description, b.published, b.published_at,
+             b.created_at, b.updated_at, b.image_media_id,
+             GREATEST(1, CEIL(char_length(b.content)::numeric / 1000)::integer) AS read_time_minutes,
+             CASE WHEN m.id IS NULL THEN NULL ELSE '/api/v1/media/' || m.id::text END AS image_url,
              m.alt_text AS image_alt
       FROM blog_posts b LEFT JOIN media_assets m ON m.id = b.image_media_id
       WHERE b.published = TRUE AND b.moderation_status = 'approved'

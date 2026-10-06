@@ -1,0 +1,144 @@
+{
+  "planHash": "0110e27deb8dd98c3453dd864f808a5f5b5d708bda2d8bbeb0721f88f428f356",
+  "phase": "baseline",
+  "recordedAtUtc": "2026-10-06T09:43:30.2041337Z",
+  "retryCount": 0,
+  "resetBaseline": false,
+  "complete": true,
+  "result": {
+    "setupSucceeded": true,
+    "setupDurationMs": 31358,
+    "setupFailureOutput": null,
+    "assertions": [
+      {
+        "name": "backend-builds",
+        "kind": "process",
+        "verificationMethod": "exit-code",
+        "passed": true,
+        "timedOut": false,
+        "skipped": false,
+        "skippedReason": null,
+        "exitCode": 0,
+        "outputSample": "\r\n\u003E voice-of-digi-bengal-backend@1.0.0 build\r\n\u003E tsc -p tsconfig.json\r\n\r\n",
+        "durationMs": 8144
+      },
+      {
+        "name": "tests-pass",
+        "kind": "process",
+        "verificationMethod": "test-results",
+        "passed": true,
+        "timedOut": false,
+        "skipped": false,
+        "skippedReason": null,
+        "exitCode": 0,
+        "outputSample": "\r\n\u003E voice-of-digi-bengal-backend@1.0.0 test\r\n\u003E node --test --import tsx --import ./src/test/setup.ts src/test/**/*.test.ts\r\n\r\n[INFO] request_completed {\r\n  requestId: \u00278befac45-980f-40d4-bb2e-8c4bb52f5343\u0027,\r\n  method: \u0027GET\u0027,\r\n  path: \u0027/api/v1/health\u0027,\r\n  status: 200,\r\n  durationMs: 13.876\r\n}\r\nGET /api/v1/health 200 4.844 ms\r\n\u2714 GET /api/v1/health responds successfully (84.4808ms)\r\n[INFO] request_completed {\r\n  requestId: \u00277d42834d-179f-4355-8861-915445f1f7c8\u0027,\r\n  method: \u0027GET\u0027,\r\n  path: \u0027/api/v1/health\u0027,\r\n  status: 200,\r\n  durationMs: 3.9848\r\n}\r\nGET /api/v1/health 200 2.447 ms\r\n\u2714 GET /api/v1/health replaces invalid client request IDs (18.4333ms)\r\n[INFO] request_completed {\r\n  requestId: \u0027c8c1f602-cd1d-4928-858c-3eb837aedb6f\u0027,\r\n  method: \u0027GET\u0027,\r\n  path: \u0027/api/v1/route-that-does-not-exist\u0027,\r\n  status: 404,\r\n  durationMs: 2.8435\r\n}\r\nGET /api/v1/route-that-does-not-exist 404 1.962 ms\r\n\u2714 unknown routes return a stable not-found response (12.8967ms)\r\n[WARN] app_error {\r\n  requestId: \u00276ad3d979-d161-49ca-9df7-1ac1a38450c1\u0027,\r\n  error: \u0027forbidden\u0027,\r\n  message: \u0027Admin access is required.\u0027,\r\n  status: 403\r\n}\r\n[INFO] request_completed {\r\n  requestId: \u00276ad3d979-d161-49ca-9df7-1ac1a38450c1\u0027,\r\n  method: \u0027GET\u0027,\r\n  path: \u0027/api/v1/admin/me\u0027,\r\n  status: 403,\r\n  durationMs: 7.0785\r\n}\r\nGET /api/v1/admin/me 403 6.312 ms\r\n\u2714 authenticated non-admin users cannot access admin routes (42.8152ms)\r\n[WARN] app_error {\r\n  requestId: \u002747bac59a-996b-4b17-bbdd-8ec89a5da3e7\u0027,\r\n  error: \u0027unauthorized\u0027,\r\n  message: \u0027Authentication required.\u0027,\r\n  status: 401\r\n}\r\n[INFO] request_completed {\r\n  requestId: \u002747bac59a-996b-4b17-bbdd-8ec89a5da3e7\u0027,\r\n  method: \u0027POST\u0027,\r\n  path: \u0027/api/v1/media/upload\u0027,\r\n  status: 401,\r\n  durationMs: 343.4703\r\n}\r\nPOST /api/v1/media/upload 401 1.192 ms\r\n[WARN] app_error {\r\n  requestId: \u0027f6d9d6b9-dc65-437d-8794-077dfcbdcbc3\u0027,\r\n  error: \u0027invalid_image\u0027,\r\n  message: \u0027Image could not be safely decoded. Upload a valid JPEG, PNG, or WebP under 25 megapixels.\u0027,\r\n  status: 422\r\n}\r\n[INFO] request_completed {\r\n  requestId: \u0027f6d9d6b9-dc65-437d-8794-077dfcbdcbc3\u0027,\r\n  method: \u0027POST\u0027,\r\n  path: \u0027/api/v1/media/upload\u0027,\r\n  status: 422,\r\n  durationMs: 16.252\r\n}\r\nPOST /api/v1/media/upload 422 14.975 ms\r\n\u2714 media upload rejects truncated images during decoding before database access (383.7131ms)\r\n[WARN] app_error {\r\n  requestId: \u0027bece16f1-f21a-44df-b084-b57eb4672113\u0027,\r\n  error: \u0027unauthorized\u0027,\r\n  message: \u0027Authentication required.\u0027,\r\n  status: 401\r\n}\r\n[INFO] request_completed {\r\n  requestId: \u0027bece16f1-f21a-44df-b084-b57eb4672113\u0027,\r\n  method: \u0027GET\u0027,\r\n  path: \u0027/api/v1/auth/me\u0027,\r\n  status: 401,\r\n  durationMs: 40.8735\r\n}\r\nGET /api/v1/auth/me 401 1.225 ms\r\n[WARN] app_error {\r\n  requestId: \u00277f96483f-22cd-4b12-9846-ccce7423cdce\u0027,\r\n  error: \u0027unauthorized\u0027,\r\n  message: \u0027Authentication required.\u0027,\r\n  status: 401\r\n}\r\n[INFO] request_completed {\r\n  requestId: \u00277f96483f-22cd-4b12-9846-ccce7423cdce\u0027,\r\n  method: \u0027PATCH\u0027,\r\n  path: \u0027/api/v1/auth/me\u0027,\r\n  status: 401,\r\n  durationMs: 43.5413\r\n}\r\nPATCH /api/v1/auth/me 401 26.633 ms\r\n[WARN] app_error {\r\n  requestId: \u002707011e7f-3084-4a84-821b-d102fbf548d6\u0027,\r\n  error: \u0027unauthorized\u0027,\r\n  message: \u0027Authentication required.\u0027,\r\n  status: 401\r\n}\r\n[INFO] request_completed {\r\n  requestId: \u002707011e7f-3084-4a84-821b-d102fbf548d6\u0027,\r\n  method: \u0027PATCH\u0027,\r\n  path: \u0027/api/v1/auth/me/preferences\u0027,\r\n  status: 401,\r\n  durationMs: 13.5196\r\n}\r\nPATCH /api/v1/auth/me/preferences 401 10.563 ms\r\n[WARN] app_error {\r\n  requestId: \u0027845bf458-6e50-4d81-9a2d-4ef037f94229\u0027,\r\n  error: \u0027unauthorized\u0027,\r\n  message: \u0027Authentication required.\u0027,\r\n  status: 401\r\n}\r\n[INFO] request_completed {\r\n  requestId: \u0027845bf458-6e50-4d81-9a2d-4ef037f94229\u0027,\r\n  method: \u0027GET\u0027,\r\n  path: \u0027/api/v1/auth/me/saved-pages\u0027,\r\n  status: 401,\r\n  durationMs: 1.8549\r\n}\r\nGET /api/v1/auth/me/saved-pages 401 0.822 ms\r\n[WARN] app_error {\r\n  requestId: \u002773ed33f2-4bac-41eb-8362-f132e0b27156\u0027,\r\n  error: \u0027unauthorized\u0027,\r\n  message: \u0027Authentication required.\u0027,\r\n  status: 401\r\n}\r\n[INFO] request_completed {\r\n  requestId: \u002773ed33f2-4bac-41eb-8362-f132e0b27156\u0027,\r\n  method: \u0027POST\u0027,\r\n  path: \u0027/api/v1/auth/me/saved-pa\n\u2026[truncated]",
+        "durationMs": 26849,
+        "testResults": {
+          "testFramework": "unknown",
+          "runnerDetectedFrom": "none",
+          "testsTotal": 0,
+          "testsPassed": 0,
+          "testsFailed": 0,
+          "testsSkipped": 0,
+          "parseFailed": true
+        }
+      },
+      {
+        "name": "health-endpoint-200",
+        "kind": "http-probe",
+        "verificationMethod": "http-status",
+        "passed": true,
+        "timedOut": false,
+        "skipped": false,
+        "skippedReason": null,
+        "exitCode": null,
+        "outputSample": "HTTP 200\n{\u0022ok\u0022:true,\u0022service\u0022:\u0022voice-of-digi-bengal-backend\u0022}\n--- server output ---\n\r\n\u003E voice-of-digi-bengal-backend@1.0.0 start\r\n\u003E node dist/server.js\r\n\r\n[INFO] backend_started { port: 4100, environment: \u0027development\u0027 }\r\n[INFO] request_completed {\r\n  requestId: \u00276e0138ba-872f-4fc4-9075-a089b1da69d7\u0027,\r\n  method: \u0027GET\u0027,\r\n  path: \u0027/api/v1/health\u0027,\r\n  status: 200,\r\n  durationMs: 8.1016\r\n}\r\nGET /api/v1/health 200 3.400 ms\r\n",
+        "durationMs": 2537
+      },
+      {
+        "name": "readiness-reports-database-outage",
+        "kind": "http-probe",
+        "verificationMethod": "http-status",
+        "passed": true,
+        "timedOut": false,
+        "skipped": false,
+        "skippedReason": null,
+        "exitCode": null,
+        "outputSample": "HTTP 503\n{\u0022ok\u0022:false,\u0022service\u0022:\u0022voice-of-digi-bengal-backend\u0022,\u0022database\u0022:\u0022unavailable\u0022}\n--- server output ---\n\r\n\u003E voice-of-digi-bengal-backend@1.0.0 start\r\n\u003E node dist/server.js\r\n\r\n[INFO] backend_started { port: 4101, environment: \u0027development\u0027 }\r\n[INFO] request_completed {\r\n  requestId: \u0027c53e78c9-6b3d-42e1-95fb-9c876144c533\u0027,\r\n  method: \u0027GET\u0027,\r\n  path: \u0027/api/v1/readiness\u0027,\r\n  status: 503,\r\n  durationMs: 14.5265\r\n}\r\n",
+        "durationMs": 2066
+      }
+    ],
+    "executions": [
+      {
+        "source": "setup[0]",
+        "resolvedExecutable": "C:\\Program Files\\nodejs\\npm.CMD",
+        "args": [
+          "ci"
+        ],
+        "cwd": "D:\\Documents\\SPACE CLEAR\\Aniruddha_Sarkar-master\\NEW CODEBASE\\backend",
+        "env": {},
+        "prependPath": [],
+        "platform": "win32"
+      },
+      {
+        "source": "backend-builds",
+        "resolvedExecutable": "C:\\Program Files\\nodejs\\npm.CMD",
+        "args": [
+          "run",
+          "build"
+        ],
+        "cwd": "D:\\Documents\\SPACE CLEAR\\Aniruddha_Sarkar-master\\NEW CODEBASE\\backend",
+        "env": {},
+        "prependPath": [],
+        "platform": "win32"
+      },
+      {
+        "source": "tests-pass",
+        "resolvedExecutable": "C:\\Program Files\\nodejs\\npm.CMD",
+        "args": [
+          "test"
+        ],
+        "cwd": "D:\\Documents\\SPACE CLEAR\\Aniruddha_Sarkar-master\\NEW CODEBASE\\backend",
+        "env": {},
+        "prependPath": [],
+        "platform": "win32"
+      },
+      {
+        "source": "health-endpoint-200",
+        "resolvedExecutable": "C:\\Program Files\\nodejs\\npm.CMD",
+        "args": [
+          "run",
+          "start"
+        ],
+        "cwd": "D:\\Documents\\SPACE CLEAR\\Aniruddha_Sarkar-master\\NEW CODEBASE\\backend",
+        "env": {
+          "NODE_ENV": "development",
+          "PORT": "4100",
+          "DATABASE_URL": "",
+          "POSTGRES_HOST": "127.0.0.1",
+          "POSTGRES_PORT": "59999"
+        },
+        "prependPath": [],
+        "platform": "win32"
+      },
+      {
+        "source": "readiness-reports-database-outage",
+        "resolvedExecutable": "C:\\Program Files\\nodejs\\npm.CMD",
+        "args": [
+          "run",
+          "start"
+        ],
+        "cwd": "D:\\Documents\\SPACE CLEAR\\Aniruddha_Sarkar-master\\NEW CODEBASE\\backend",
+        "env": {
+          "NODE_ENV": "development",
+          "PORT": "4101",
+          "DATABASE_URL": "",
+          "POSTGRES_HOST": "127.0.0.1",
+          "POSTGRES_PORT": "59999"
+        },
+        "prependPath": [],
+        "platform": "win32"
+      }
+    ]
+  }
+}

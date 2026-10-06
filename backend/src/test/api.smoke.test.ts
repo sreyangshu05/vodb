@@ -1,10 +1,12 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
+import type { Request } from 'express';
 import request from 'supertest';
 import app from '../server.js';
 import { db } from '../lib/db.js';
 import { waitForAuditWrites } from '../services/auditService.js';
 import { signToken } from '../services/authService.js';
+import { metrics } from '../services/metricsService.js';
 import { env } from '../config/env.js';
 
 after(async () => {
@@ -37,7 +39,7 @@ test('unknown routes return a stable not-found response', async () => {
 });
 
 test('authenticated non-admin users cannot access admin routes', async () => {
-  const token = signToken({
+  const token = await signToken({
     id: 'verification-member',
     email: 'verification-member@example.com',
     name: 'Verification Member',
@@ -49,6 +51,100 @@ test('authenticated non-admin users cannot access admin routes', async () => {
 
   assert.equal(res.status, 403);
   assert.equal(res.body.error, 'forbidden');
+});
+
+test('media upload rejects truncated images during decoding before database access', async () => {
+  const anonymous = await request(app)
+    .post('/api/v1/media/upload')
+    .send({ data: 'data:image/png;base64,iVBORw0KGgo=', mimeType: 'image/png' });
+  assert.equal(anonymous.status, 401);
+
+  const token = await signToken({
+    id: 'verification-admin',
+    email: 'verification-admin@example.com',
+    name: 'Verification Admin',
+    role: 'admin',
+  });
+  const response = await request(app)
+    .post('/api/v1/media/upload')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ data: 'data:image/png;base64,iVBORw0KGgo=', mimeType: 'image/png', fileName: '../unsafe.png' });
+
+  assert.equal(response.status, 422);
+  assert.equal(response.body.error, 'invalid_image');
+});
+
+test('reader profile, preference, and saved-page APIs require authentication', async () => {
+  const responses = await Promise.all([
+    request(app).get('/api/v1/auth/me'),
+    request(app).patch('/api/v1/auth/me').send({ name: 'Updated Reader' }),
+    request(app).patch('/api/v1/auth/me/preferences').send({ topics: ['history'] }),
+    request(app).get('/api/v1/auth/me/saved-pages'),
+    request(app).post('/api/v1/auth/me/saved-pages').send({ path: '/history', title: 'History' }),
+    request(app).delete('/api/v1/auth/me/saved-pages').send({ path: '/history' }),
+  ]);
+
+  for (const response of responses) {
+    assert.equal(response.status, 401);
+    assert.equal(response.body.error, 'unauthorized');
+  }
+});
+
+test('admin audience APIs require authentication', async () => {
+  const responses = await Promise.all([
+    request(app).get('/api/v1/admin/inquiries?limit=25&offset=0'),
+    request(app).get('/api/v1/admin/subscribers?limit=25&offset=0'),
+    request(app).get('/api/v1/admin/users?limit=25&offset=0'),
+  ]);
+
+  for (const response of responses) {
+    assert.equal(response.status, 401);
+    assert.equal(response.body.error, 'unauthorized');
+  }
+});
+
+test('saved-page API rejects external and backslash-normalized paths', async () => {
+  const token = await signToken({
+    id: 'verification-member',
+    email: 'verification-member@example.com',
+    name: 'Verification Member',
+    role: 'member',
+  });
+  for (const path of ['//outside.example', '/\\\\outside.example']) {
+    const response = await request(app)
+      .post('/api/v1/auth/me/saved-pages')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ path, title: 'External path' });
+    assert.equal(response.status, 422);
+    assert.equal(response.body.error, 'invalid_saved_page');
+  }
+});
+
+test('account deletion requires confirmation and cannot delete admin identities', async () => {
+  const memberToken = await signToken({
+    id: 'verification-member',
+    email: 'verification-member@example.com',
+    name: 'Verification Member',
+    role: 'member',
+  });
+  const missingConfirmation = await request(app)
+    .delete('/api/v1/auth/me')
+    .set('Authorization', `Bearer ${memberToken}`);
+  assert.equal(missingConfirmation.status, 422);
+  assert.equal(missingConfirmation.body.error, 'account_deletion_confirmation_required');
+
+  const adminToken = await signToken({
+    id: 'verification-admin',
+    email: 'verification-admin@example.com',
+    name: 'Verification Admin',
+    role: 'admin',
+  });
+  const adminDeletion = await request(app)
+    .delete('/api/v1/auth/me')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ confirmation: 'DELETE' });
+  assert.equal(adminDeletion.status, 403);
+  assert.equal(adminDeletion.body.error, 'account_deletion_unavailable');
 });
 
 test('Google sign-in identifies a token issued for another OAuth client', {
@@ -75,6 +171,32 @@ test('GET /api/v1/readiness reports database availability', async () => {
   assert.equal(res.status, 503);
   assert.equal(res.body.ok, false);
   assert.equal(res.body.database, 'unavailable');
+});
+
+test('metrics group content slugs into one bounded endpoint dimension', async () => {
+  const first = await request(app).get('/api/v1/blogs/slug/metrics-sre-first');
+  const second = await request(app).get('/api/v1/blogs/slug/metrics-sre-second');
+  assert.equal(first.status, 503);
+  assert.equal(second.status, 503);
+
+  const snapshot = await request(app).get('/api/v1/observability/snapshot');
+  const endpoint = snapshot.body.requests.endpoints['GET /api/v1/blogs/slug/:slug'];
+  assert.ok(endpoint.count >= 2);
+  assert.equal(Object.keys(snapshot.body.requests.endpoints).some((key) => key.includes('metrics-sre-')), false);
+});
+
+test('metrics endpoint dimensions stay within their configured bound', async () => {
+  for (let index = 0; index < 150; index += 1) {
+    const metricRequest = metrics.requestStarted({
+      method: 'GET',
+      path: `/api/v1/metric-cardinality-${index}`,
+    } as Request);
+    metrics.requestCompleted(metricRequest.key, 404, metricRequest.startedAt);
+  }
+
+  const snapshot = metrics.snapshot({});
+  assert.ok(Object.keys(snapshot.requests.endpoints).length <= 128);
+  assert.ok(snapshot.requests.endpoints['OTHER <other>'].count >= 1);
 });
 
 test('observability exposes live backend, frontend, process, and database metrics', async () => {
@@ -152,6 +274,47 @@ test('POST /api/v1/newsletter/subscribe drops honeypot submissions before databa
 
   assert.equal(res.status, 202);
   assert.equal(res.body.success, true);
+});
+
+test('POST /api/v1/newsletter/resend-confirmation validates email and hides honeypot submissions', async () => {
+  const invalid = await request(app)
+    .post('/api/v1/newsletter/resend-confirmation')
+    .send({ email: 'not-an-email' });
+  assert.equal(invalid.status, 422);
+
+  const honeypot = await request(app)
+    .post('/api/v1/newsletter/resend-confirmation')
+    .send({ email: 'bot@example.com', website: 'https://bot.example.com' });
+  assert.equal(honeypot.status, 202);
+  assert.match(honeypot.body.message, /if an unconfirmed subscription exists/i);
+});
+
+test('newsletter token actions do not mutate state on GET and require valid POST tokens', async () => {
+  for (const action of ['confirm', 'unsubscribe']) {
+    const scannedLink = await request(app).get(`/api/v1/newsletter/${action}?token=${'a'.repeat(43)}`);
+    assert.equal(scannedLink.status, 404);
+    assert.equal(scannedLink.body.error, 'not_found');
+
+    const invalidPost = await request(app).post(`/api/v1/newsletter/${action}`).send({ token: 'invalid' });
+    assert.equal(invalidPost.status, 400);
+    assert.equal(invalidPost.body.error, 'invalid_subscription_token');
+    assert.equal(invalidPost.headers['cache-control'], 'no-store');
+    assert.equal(invalidPost.headers['referrer-policy'], 'no-referrer');
+  }
+});
+
+test('GET /api/v1/search validates query before database access', async () => {
+  const response = await request(app).get('/api/v1/search?q=x');
+  assert.equal(response.status, 422);
+  assert.equal(response.body.error, 'invalid_search_query');
+});
+
+test('editorial AI suggestions require admin authentication', async () => {
+  const response = await request(app)
+    .post('/api/v1/admin/ai/editorial-suggestions')
+    .send({ kind: 'blog', title: 'A story', content: 'Draft content.' });
+  assert.equal(response.status, 401);
+  assert.equal(response.body.error, 'unauthorized');
 });
 
 test('POST /api/v1/admin/login issues a JWT for valid credentials', async () => {

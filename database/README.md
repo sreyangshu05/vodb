@@ -16,6 +16,7 @@ The implemented schema covers only the durable domain evidence documented in the
 - `password_reset_otps`
 - `reader_email_verification_otps` and verified reader email state
 - `media_assets` (PostgreSQL `BYTEA` image data for editorial images)
+- shared `rate_limit_buckets` and contact-submission idempotency keys
 
 The database intentionally does not add tenanting, Redis, Elasticsearch, Kafka, search clusters, multi-region replication, or object-storage metadata because the repository evidence does not require them.
 
@@ -76,6 +77,9 @@ Migrations are intentionally ordered and plain SQL:
 - `migrations/012_add_published_search_indexes.sql`
 - `migrations/013_harden_newsletter_action_tokens.sql`
 - `migrations/014_require_verified_reader_email.sql`
+- `migrations/015_limit_email_otp_attempts.sql`
+- `migrations/016_reliability_controls.sql`
+- `migrations/017_add_all_day_events.sql`
 
 Homepage image bytes are held in PostgreSQL `BYTEA`. Import requires adequate database storage and backup capacity (about 138 MiB for the current homepage image manifest).
 
@@ -86,6 +90,10 @@ npm.cmd --prefix backend run db:migrate
 ```
 
 The runner applies every pending numbered migration and records checksums in `app_schema_migrations`. Use a direct connection URL for migrations; the pooled `DATABASE_URL` is for the running API. Test pending migrations on a Neon branch before applying them to production.
+
+Migration 016 adds shared PostgreSQL-backed rate-limit buckets, contact-inquiry idempotency, and a user token version used to revoke existing JWTs after password resets. Requests to protected APIs use the shared rate-limit table, so apply all migrations before deploying the corresponding backend version. The contact form sends a UUID `Idempotency-Key`; retries with the same key and body return the original inquiry rather than inserting a duplicate.
+
+Migration 017 adds all-day event dates. Date-only values are stored as UTC-midnight calendar-date anchors and displayed without timezone conversion; timed events continue to use offset-aware timestamps.
 
 To apply just one migration after confirming its prerequisites are already recorded, pass its exact filename:
 

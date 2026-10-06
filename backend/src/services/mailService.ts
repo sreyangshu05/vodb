@@ -7,6 +7,7 @@ const transporter = env.SMTP_HOST
       host: env.SMTP_HOST,
       port: env.SMTP_PORT,
       secure: env.SMTP_SECURE,
+      requireTLS: env.NODE_ENV === 'production' && !env.SMTP_SECURE,
       connectionTimeout: 5000,
       greetingTimeout: 5000,
       socketTimeout: 10000,

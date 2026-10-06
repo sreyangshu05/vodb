@@ -12,14 +12,20 @@ export function notFoundHandler(_req: Request, res: Response) {
 
 export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
   const requestId = req.headers['x-request-id'];
+  const requestContext = {
+    requestId,
+    userId: req.user?.id,
+    method: req.method,
+    route: req.route?.path ?? '<unmatched>',
+  };
 
   if (err instanceof AppError) {
-    logger.warn('app_error', { requestId, error: err.error, message: err.message, status: err.status });
+    logger.warn('app_error', { ...requestContext, error: err.error, message: err.message, status: err.status });
     return res.status(err.status).json(err.toResponse());
   }
 
   if (isDatabaseUnavailable(err)) {
-    logger.error('database_unavailable', { requestId, message: err instanceof Error ? err.message : 'Database unavailable' });
+    logger.error('database_unavailable', { ...requestContext, message: err instanceof Error ? err.message : 'Database unavailable' });
     return res.status(503).json({
       error: 'service_unavailable',
       message: 'The service is temporarily unavailable. Please try again later.',
@@ -27,14 +33,14 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
   }
 
   if (err instanceof Error) {
-    logger.error('unhandled_error', { requestId, message: err.message, stack: err.stack });
+    logger.error('unhandled_error', { ...requestContext, message: err.message, stack: err.stack });
     return res.status(500).json({
       error: 'internal_server_error',
       message: 'An unexpected server error occurred.',
     });
   }
 
-  logger.error('unknown_error', { requestId, payload: err });
+  logger.error('unknown_error', { ...requestContext, payload: err });
   return res.status(500).json({
     error: 'internal_server_error',
     message: 'An unexpected server error occurred.',

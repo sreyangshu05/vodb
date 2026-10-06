@@ -20,6 +20,7 @@ export interface BlogRecord {
   image_media_id?: string | null;
   image_url?: string | null;
   image_alt?: string | null;
+  read_time_minutes?: number;
 }
 
 export interface EventRecord {
@@ -29,6 +30,7 @@ export interface EventRecord {
   description: string;
   event_date: string;
   ends_at: string | null;
+  all_day: boolean;
   location: string;
   published: boolean;
   capacity: number | null;

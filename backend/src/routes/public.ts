@@ -4,12 +4,11 @@ import { createRateLimiter } from '../middleware/rateLimit.js';
 import crypto from 'node:crypto';
 import { AppError } from '../utils/errors.js';
 import { contactSchema, newsletterDeliveryWebhookSchema, newsletterSchema, newsletterTokenSchema } from '../lib/validators.js';
-import { confirmNewsletterSubscription, createContactInquiry, createNewsletterSubscription, discardNewsletterSubscription, processNewsletterDeliveryEvent, resendPendingNewsletterConfirmation, unsubscribeNewsletter } from '../services/submissionService.js';
+import { confirmNewsletterSubscription, createContactInquiry, createNewsletterSubscription, discardNewsletterSubscription, processNewsletterDeliveryEvent, resendPendingNewsletterConfirmation, restorePendingNewsletterConfirmation, unsubscribeNewsletter } from '../services/submissionService.js';
 import { sendNewsletterConfirmation } from '../services/mailService.js';
 import { getBlogBySlug, getEventBySlug, listPublishedBlogs, listPublishedEvents, searchPublishedContent } from '../services/contentService.js';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
-import { answerFromPublishedKnowledge } from '../services/knowledgeService.js';
 
 const router = Router();
 const paginationSchema = z.object({
@@ -34,30 +33,37 @@ function isAppErrorLike(value: unknown): value is AppError {
 const publicLimiter = createRateLimiter({
   windowMs: env.RATE_LIMIT_WINDOW_MS,
   max: env.RATE_LIMIT_MAX_REQUESTS,
+  shared: true,
+  keyPrefix: 'public-api',
 });
 
 const newsletterLimiter = createRateLimiter({
   windowMs: env.NEWSLETTER_RATE_LIMIT_WINDOW_MS,
-  max: env.NEWSLETTER_RATE_LIMIT_MAX_REQUESTS,
+  max: env.NEWSLETTER_RATE_LIMIT_MAX_REQUESTS * 6,
+  identityMax: 3,
+  shared: true,
+  keyPrefix: 'newsletter-submit',
+  identity: (req) => typeof req.body?.email === 'string' ? req.body.email : undefined,
   message: 'Newsletter submissions are temporarily limited. Please try again later.',
 });
 
 const newsletterResendLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
   max: 3,
+  shared: true,
+  keyPrefix: 'newsletter-resend',
+  identity: (req) => typeof req.body?.email === 'string' ? req.body.email : undefined,
   message: 'Too many confirmation requests. Please wait before trying again.',
 });
 
-const knowledgeQuestionLimiter = createRateLimiter({
-  windowMs: 60 * 1000,
-  max: 10,
-  message: 'Too many knowledge questions. Please wait before trying again.',
-});
-
-const contentSearchLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 40, message: 'Too many search requests. Please wait before trying again.' });
+const contentSearchLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 40, shared: true, keyPrefix: 'content-search', message: 'Too many search requests. Please wait before trying again.' });
 const contactLimiter = createRateLimiter({
   windowMs: env.CONTACT_RATE_LIMIT_WINDOW_MS,
-  max: env.CONTACT_RATE_LIMIT_MAX_REQUESTS,
+  max: env.CONTACT_RATE_LIMIT_MAX_REQUESTS * 6,
+  identityMax: env.CONTACT_RATE_LIMIT_MAX_REQUESTS,
+  shared: true,
+  keyPrefix: 'contact-submit',
+  identity: (req) => typeof req.body?.email === 'string' ? req.body.email : undefined,
   message: 'Too many contact submissions. Please wait before sending another message.',
 });
 
@@ -70,7 +76,7 @@ router.get('/health', (_req, res) => {
 router.get('/blogs', async (req, res, next) => {
   try {
     const { limit, offset } = paginationSchema.parse(req.query);
-    res.setHeader('Cache-Control', 'public, max-age=60, stale-while-revalidate=300');
+    res.setHeader('Cache-Control', 'no-store');
     const rows = await listPublishedBlogs(limit, offset);
     res.json(rows);
   } catch (error) {
@@ -85,6 +91,7 @@ router.get('/blogs/slug/:slug', async (req, res, next) => {
   try {
     const slug = z.string().trim().min(1).parse(req.params.slug);
     const blog = await getBlogBySlug(slug);
+    res.setHeader('Cache-Control', 'no-store');
     res.json(blog);
   } catch (error) {
     next(error);
@@ -94,7 +101,7 @@ router.get('/blogs/slug/:slug', async (req, res, next) => {
 router.get('/events', async (req, res, next) => {
   try {
     const { limit, offset } = paginationSchema.parse(req.query);
-    res.setHeader('Cache-Control', 'public, max-age=60, stale-while-revalidate=300');
+    res.setHeader('Cache-Control', 'no-store');
     const rows = await listPublishedEvents(limit, offset);
     res.json(rows);
   } catch (error) {
@@ -109,6 +116,7 @@ router.get('/events/slug/:slug', async (req, res, next) => {
   try {
     const slug = z.string().trim().min(1).parse(req.params.slug);
     const event = await getEventBySlug(slug);
+    res.setHeader('Cache-Control', 'no-store');
     res.json(event);
   } catch (error) {
     next(error);
@@ -118,7 +126,7 @@ router.get('/events/slug/:slug', async (req, res, next) => {
 router.get('/search', contentSearchLimiter, async (req, res, next) => {
   try {
     const { q, type, limit, offset } = contentSearchSchema.parse(req.query);
-    res.setHeader('Cache-Control', 'public, max-age=30, stale-while-revalidate=120');
+    res.setHeader('Cache-Control', 'no-store');
     res.json(await searchPublishedContent(q, type, limit, offset));
   } catch (error) {
     if (error instanceof z.ZodError) return next(new AppError(422, 'invalid_search_query', 'Search text must be between 2 and 160 characters.'));
@@ -151,7 +159,7 @@ router.post('/newsletter/subscribe', newsletterLimiter, async (req, res, next) =
       if (error.error === 'newsletter_already_registered') {
         return res.status(202).json({
           success: true,
-          message: 'If this email needs confirmation, a confirmation request has been sent. Active subscriptions are unchanged.',
+          message: 'A confirmation may already be pending. Use the resend option if it does not arrive. Active subscriptions are unchanged.',
         });
       }
       return next(error);
@@ -171,8 +179,13 @@ router.post('/newsletter/resend-confirmation', newsletterResendLimiter, async (r
     if (!parsed.website?.trim()) {
       const pending = await resendPendingNewsletterConfirmation(parsed.email);
       if (pending) {
-        void sendNewsletterConfirmation(pending.email, pending.confirmationToken, pending.unsubscribeToken)
-          .catch(() => logger.warn('newsletter_confirmation_resend_failed'));
+        try {
+          await sendNewsletterConfirmation(pending.email, pending.confirmationToken, pending.unsubscribeToken);
+        } catch (error) {
+          await restorePendingNewsletterConfirmation(pending.email, pending.confirmationToken, pending.previousTokenState);
+          logger.warn('newsletter_confirmation_resend_failed', { requestId: req.get('x-request-id'), message: error instanceof Error ? error.message : 'Email delivery failed' });
+          throw error;
+        }
       }
     }
     res.status(202).json({
@@ -181,17 +194,8 @@ router.post('/newsletter/resend-confirmation', newsletterResendLimiter, async (r
     });
   } catch (error) {
     if (error instanceof z.ZodError) return next(new AppError(422, 'invalid_payload', 'Please provide a valid email address.'));
+    if (isAppErrorLike(error)) return next(error);
     next(new AppError(503, 'confirmation_resend_unavailable', 'The newsletter confirmation service is temporarily unavailable.'));
-  }
-});
-
-router.post('/knowledge/ask', knowledgeQuestionLimiter, async (req, res, next) => {
-  try {
-    const payload = z.object({ question: z.string().trim().min(4).max(500) }).parse(req.body ?? {});
-    res.json(await answerFromPublishedKnowledge(payload.question));
-  } catch (error) {
-    if (error instanceof z.ZodError) return next(new AppError(422, 'invalid_question', 'Enter a question between 4 and 500 characters.'));
-    next(new AppError(503, 'knowledge_search_unavailable', 'Published knowledge search is temporarily unavailable.'));
   }
 });
 
@@ -241,15 +245,20 @@ router.post('/newsletter/webhooks/delivery', async (req, res, next) => {
 router.post('/contact', contactLimiter, async (req, res, next) => {
   try {
     const parsed = contactSchema.parse(req.body ?? {});
+    const idempotencyKey = req.get('idempotency-key');
+    if (idempotencyKey && !z.string().uuid().safeParse(idempotencyKey).success) {
+      return next(new AppError(400, 'invalid_idempotency_key', 'Idempotency-Key must be a UUID.'));
+    }
     if (parsed.website?.trim()) {
       return res.status(202).json({ success: true, message: 'Your message has been received.' });
     }
-    const record = await createContactInquiry(parsed);
-    res.status(201).json({
+    const record = await createContactInquiry(parsed, idempotencyKey);
+    res.status(record.replayed ? 200 : 201).json({
       success: true,
       message: 'Your message has been received.',
       id: record.id,
       status: record.status,
+      replayed: record.replayed,
     });
   } catch (error) {
     if (isAppErrorLike(error)) {

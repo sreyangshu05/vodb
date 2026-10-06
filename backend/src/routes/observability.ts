@@ -1,7 +1,8 @@
-import { Router } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { env } from '../config/env.js';
 import { db } from '../lib/db.js';
+import { createRateLimiter } from '../middleware/rateLimit.js';
 import { auditWriteStats } from '../services/auditService.js';
 import { metrics } from '../services/metricsService.js';
 
@@ -16,21 +17,26 @@ const frontendMetricSchema = z.object({
   metadata: z.record(z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
 });
 
-router.use((req, res, next) => {
+const frontendMetricLimiter = createRateLimiter({
+  windowMs: 60_000,
+  max: 300,
+  message: 'Frontend telemetry limit reached. Please try again later.',
+});
+
+function requireObservabilityToken(req: Request, res: Response, next: NextFunction) {
   if (env.NODE_ENV !== 'production') {
     next();
     return;
   }
 
-  const suppliedToken = req.get('x-observability-token')
-    ?? (typeof req.query.token === 'string' ? req.query.token : undefined);
+  const suppliedToken = req.get('x-observability-token');
   if (env.OBSERVABILITY_TOKEN && suppliedToken === env.OBSERVABILITY_TOKEN) {
     next();
     return;
   }
 
   res.status(404).json({ error: 'not_found' });
-});
+}
 
 async function databaseSnapshot() {
   const audit = auditWriteStats();
@@ -42,11 +48,11 @@ async function databaseSnapshot() {
   }
 }
 
-router.get('/snapshot', async (_req, res) => {
+router.get('/snapshot', requireObservabilityToken, async (_req, res) => {
   res.json(metrics.snapshot(await databaseSnapshot()));
 });
 
-router.get('/stream', (req, res) => {
+router.get('/stream', requireObservabilityToken, (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
@@ -55,7 +61,7 @@ router.get('/stream', (req, res) => {
   req.on('close', unsubscribe);
 });
 
-router.post('/frontend', (req, res) => {
+router.post('/frontend', frontendMetricLimiter, (req, res) => {
   const parsed = frontendMetricSchema.safeParse(req.body);
   if (parsed.success) {
     metrics.recordFrontendEvent(parsed.data);

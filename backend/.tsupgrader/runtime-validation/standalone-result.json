@@ -1,0 +1,27 @@
+{
+  "planHash": "0110e27deb8dd98c3453dd864f808a5f5b5d708bda2d8bbeb0721f88f428f356",
+  "phase": "standalone",
+  "recordedAtUtc": "2026-10-06T10:27:39.4577668Z",
+  "retryCount": 1,
+  "resetBaseline": false,
+  "complete": true,
+  "result": {
+    "setupSucceeded": false,
+    "setupDurationMs": 1666,
+    "setupFailureOutput": "setup step 0 \u0027npm\u0027 failed (exit=-4048, timedOut=False)\r\nnpm error code EPERM\r\nnpm error syscall unlink\r\nnpm error path D:\\Documents\\SPACE CLEAR\\Aniruddha_Sarkar-master\\NEW CODEBASE\\backend\\node_modules\\argon2\\prebuilds\\win32-x64\\argon2.glibc.node\r\nnpm error errno -4048\r\nnpm error [Error: EPERM: operation not permitted, unlink \u0027D:\\Documents\\SPACE CLEAR\\Aniruddha_Sarkar-master\\NEW CODEBASE\\backend\\node_modules\\argon2\\prebuilds\\win32-x64\\argon2.glibc.node\u0027] {\r\nnpm error   errno: -4048,\r\nnpm error   code: \u0027EPERM\u0027,\r\nnpm error   syscall: \u0027unlink\u0027,\r\nnpm error   path: \u0027D:\\\\Documents\\\\SPACE CLEAR\\\\Aniruddha_Sarkar-master\\\\NEW CODEBASE\\\\backend\\\\node_modules\\\\argon2\\\\prebuilds\\\\win32-x64\\\\argon2.glibc.node\u0027\r\nnpm error }\r\nnpm error\r\nnpm error The operation was rejected by your operating system.\r\nnpm error It\u0027s possible that the file was already in use (by a text editor or antivirus),\r\nnpm error or that you lack permissions to access it.\r\nnpm error\r\nnpm error If you believe this might be a permissions issue, please double-check the\r\nnpm error permissions of the file and its containing directories, or try running\r\nnpm error the command again as root/Administrator.\r\nnpm error A complete log of this run can be found in: C:\\Users\\User\\AppData\\Local\\npm-cache\\_logs\\2026-10-06T10_27_38_214Z-debug-0.log\r\n",
+    "assertions": [],
+    "executions": [
+      {
+        "source": "setup[0]",
+        "resolvedExecutable": "C:\\Program Files\\nodejs\\npm.CMD",
+        "args": [
+          "ci"
+        ],
+        "cwd": "D:\\Documents\\SPACE CLEAR\\Aniruddha_Sarkar-master\\NEW CODEBASE\\backend",
+        "env": {},
+        "prependPath": [],
+        "platform": "win32"
+      }
+    ]
+  }
+}

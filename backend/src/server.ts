@@ -12,7 +12,7 @@ import { requestIdMiddleware } from './middleware/requestId.js';
 import { db } from './lib/db.js';
 import mediaRouter from './routes/media.js';
 import { logger } from './utils/logger.js';
-import { auditWriteStats, waitForAuditWrites } from './services/auditService.js';
+import { waitForAuditWrites } from './services/auditService.js';
 import observabilityRouter from './routes/observability.js';
 import { metrics } from './services/metricsService.js';
 
@@ -56,7 +56,7 @@ app.use(
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Media-Access-Token', 'X-Request-Id', 'X-Observability-Token'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Media-Access-Token', 'X-Request-Id', 'X-Observability-Token', 'Idempotency-Key'],
   })
 );
 app.use(helmet({
@@ -73,14 +73,14 @@ app.use(helmet({
   },
 }));
 app.use(express.json({ limit: '7mb' }));
-app.use(morgan('dev'));
+app.use(morgan((tokens, req, res) => `${tokens.method(req, res)} ${req.path} ${tokens.status(req, res)} ${tokens['response-time'](req, res)} ms`));
 
 app.get('/', (_req, res) => {
   res.json({ service: 'voice-of-digi-bengal-backend', status: 'ok' });
 });
 
 app.get('/api/v1/health', (_req, res) => {
-  res.json({ ok: true, service: 'voice-of-digi-bengal-backend', timestamp: new Date().toISOString() });
+  res.json({ ok: true, service: 'voice-of-digi-bengal-backend' });
 });
 
 app.get('/api/v1/readiness', async (_req, res) => {
@@ -90,8 +90,6 @@ app.get('/api/v1/readiness', async (_req, res) => {
       ok: true,
       service: 'voice-of-digi-bengal-backend',
       database: 'ready',
-      pool: db.poolStats(),
-      audit: auditWriteStats(),
     });
   } catch {
     res.status(503).json({
@@ -119,6 +117,18 @@ if (process.env.NODE_ENV !== 'test' && isMain) {
   const server = app.listen(port, '0.0.0.0', () => {
     metrics.markRunning();
     logger.info('backend_started', { port, environment: env.NODE_ENV });
+  });
+
+  server.on('error', (error: NodeJS.ErrnoException) => {
+    if (error.code === 'EADDRINUSE') {
+      logger.error('backend_port_in_use', {
+        port,
+        message: `Port ${port} is already in use. Stop the other server or choose another PORT.`,
+      });
+    } else {
+      logger.error('backend_start_failed', { port, code: error.code, message: error.message });
+    }
+    process.exit(1);
   });
 
   let shutdownPromise: Promise<void> | undefined;

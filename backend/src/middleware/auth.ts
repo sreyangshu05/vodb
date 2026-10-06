@@ -1,16 +1,37 @@
 import type { NextFunction, Request, Response } from 'express';
 import { AppError } from '../utils/errors.js';
 import { verifyToken } from '../services/authService.js';
+import { db } from '../lib/db.js';
+import { env } from '../config/env.js';
 
-export function requireAuth(req: Request, _res: Response, next: NextFunction) {
+const USER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export async function requireAuth(req: Request, _res: Response, next: NextFunction) {
   const header = req.headers.authorization;
   if (!header || !header.startsWith('Bearer ')) {
     return next(new AppError(401, 'unauthorized', 'Authentication required.'));
   }
 
+  let payload: ReturnType<typeof verifyToken>;
   try {
     const token = header.slice('Bearer '.length).trim();
-    const payload = verifyToken(token);
+    payload = verifyToken(token);
+  } catch {
+    return next(new AppError(401, 'invalid_token', 'Authentication token is invalid or expired.'));
+  }
+
+  try {
+    if (USER_ID_PATTERN.test(payload.sub)) {
+      const result = await db.query<{ token_version: number }>(
+        'SELECT token_version FROM users WHERE id = $1',
+        [payload.sub],
+      );
+      if (!result.rows[0] || result.rows[0].token_version !== payload.tokenVersion) {
+        return next(new AppError(401, 'invalid_token', 'Authentication token is invalid or expired.'));
+      }
+    } else if (!(payload.configuredAdmin || env.NODE_ENV === 'test')) {
+      return next(new AppError(401, 'invalid_token', 'Authentication token is invalid or expired.'));
+    }
     req.user = {
       id: payload.sub,
       name: payload.name,
@@ -18,8 +39,8 @@ export function requireAuth(req: Request, _res: Response, next: NextFunction) {
       role: payload.role,
     };
     return next();
-  } catch {
-    return next(new AppError(401, 'invalid_token', 'Authentication token is invalid or expired.'));
+  } catch (error) {
+    return next(error);
   }
 }
 

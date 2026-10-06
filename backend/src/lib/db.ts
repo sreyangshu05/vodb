@@ -9,14 +9,17 @@ types.setTypeParser(1184, (value) => value);
 
 const pool = new Pool({
   ...(env.DATABASE_URL
-    ? { connectionString: env.DATABASE_URL }
+    ? {
+        connectionString: env.DATABASE_URL,
+        ...(env.NODE_ENV === 'production' ? { ssl: { rejectUnauthorized: true } } : {}),
+      }
     : {
         host: env.POSTGRES_HOST,
         port: env.POSTGRES_PORT,
         database: env.POSTGRES_DB,
         user: env.POSTGRES_USER,
         password: env.POSTGRES_PASSWORD,
-        ssl: env.POSTGRES_SSL ? { rejectUnauthorized: false } : false,
+        ssl: env.POSTGRES_SSL ? { rejectUnauthorized: env.NODE_ENV === 'production' } : false,
       }),
   max: 20,
   idleTimeoutMillis: 30000,

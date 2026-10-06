@@ -1,12 +1,14 @@
 import jwt, { type Secret, type SignOptions } from 'jsonwebtoken';
 import { OAuth2Client } from 'google-auth-library';
+import argon2 from 'argon2';
 import { promisify } from 'node:util';
-import { createHash, randomBytes, randomInt, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomInt, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
 import { env } from '../config/env.js';
 import { db } from '../lib/db.js';
 import { AppError } from '../utils/errors.js';
 import type { AuthUser } from '../types/api.js';
 import { logger } from '../utils/logger.js';
+import { hashOneTimeCode } from '../utils/otp.js';
 
 const scrypt = promisify(scryptCallback);
 const PASSWORD_KEY_LENGTH = 64;
@@ -88,22 +90,63 @@ function googleClientMismatchMessage(tokenAudiences: string[] = []): string {
   return `Google returned OAuth client ${received}, but the backend expects ${clientIdHint(env.GOOGLE_CLIENT_ID!)}. Restart the frontend and backend, then ensure both environment variables use the same client ID.`;
 }
 
+function parseLegacyScryptHash(encodedHash: string): { salt: string; storedKey: string } | null {
+  const [algorithm, salt, storedKey] = encodedHash.split('$');
+  if (algorithm !== 'scrypt' || !salt || !storedKey || !/^[0-9a-f]+$/i.test(storedKey)) return null;
+  return { salt, storedKey };
+}
+
 export async function hashPassword(password: string): Promise<string> {
-  const salt = randomBytes(16).toString('hex');
-  const derivedKey = await scrypt(password, salt, PASSWORD_KEY_LENGTH) as Buffer;
-  return `scrypt$${salt}$${derivedKey.toString('hex')}`;
+  return argon2.hash(password, {
+    type: argon2.argon2id,
+    memoryCost: 65536,
+    timeCost: 3,
+    parallelism: 1,
+  });
 }
 
 export async function verifyPassword(password: string, encodedHash: string): Promise<boolean> {
-  const [algorithm, salt, storedKey] = encodedHash.split('$');
-  if (algorithm !== 'scrypt' || !salt || !storedKey || !/^[0-9a-f]+$/i.test(storedKey)) return false;
-  const derivedKey = await scrypt(password, salt, PASSWORD_KEY_LENGTH) as Buffer;
-  const expectedKey = Buffer.from(storedKey, 'hex');
+  if (!encodedHash) return false;
+
+  if (encodedHash.startsWith('$argon2id$')) {
+    try {
+      return await argon2.verify(encodedHash, password);
+    } catch {
+      return false;
+    }
+  }
+
+  const legacyHash = parseLegacyScryptHash(encodedHash);
+  if (!legacyHash) return false;
+
+  const derivedKey = (await scrypt(password, legacyHash.salt, PASSWORD_KEY_LENGTH)) as Buffer;
+  const expectedKey = Buffer.from(legacyHash.storedKey, 'hex');
   return expectedKey.length === derivedKey.length && timingSafeEqual(expectedKey, derivedKey);
 }
-export function signToken(user: AuthUser) {
+const USER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export async function signToken(user: AuthUser) {
+  const configuredAdmin = user.role === 'admin' && user.id.startsWith('admin-');
+  let tokenVersion = 0;
+  if (USER_ID_PATTERN.test(user.id)) {
+    const result = await db.query<{ token_version: number }>(
+      'SELECT token_version FROM users WHERE id = $1',
+      [user.id],
+    );
+    if (!result.rows[0]) throw new AppError(401, 'account_not_found', 'The account is no longer available.');
+    tokenVersion = result.rows[0].token_version;
+  } else if (!configuredAdmin && env.NODE_ENV !== 'test') {
+    throw new AppError(401, 'invalid_account_id', 'The account identity is invalid.');
+  }
   return jwt.sign(
-    { sub: user.id, email: user.email, name: user.name, role: user.role },
+    {
+      sub: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      tokenVersion,
+      configuredAdmin,
+    },
     env.JWT_SECRET as Secret,
     {
       expiresIn: env.JWT_EXPIRES_IN as SignOptions['expiresIn'],
@@ -112,7 +155,23 @@ export function signToken(user: AuthUser) {
 }
 
 export function verifyToken(token: string) {
-  return jwt.verify(token, env.JWT_SECRET) as { sub: string; email: string; name?: string; role: AuthUser['role'] };
+  const payload = jwt.verify(token, env.JWT_SECRET);
+  if (!payload || typeof payload !== 'object' ||
+      typeof payload.sub !== 'string' ||
+      typeof payload.email !== 'string' ||
+      !['member', 'editor', 'admin'].includes(String(payload.role)) ||
+      !Number.isSafeInteger(payload.tokenVersion ?? 0) ||
+      Number(payload.tokenVersion ?? 0) < 0) {
+    throw new Error('Invalid authentication token claims.');
+  }
+  return {
+    sub: payload.sub,
+    email: payload.email,
+    name: typeof payload.name === 'string' ? payload.name : undefined,
+    role: payload.role as AuthUser['role'],
+    tokenVersion: Number(payload.tokenVersion ?? 0),
+    configuredAdmin: payload.configuredAdmin === true,
+  };
 }
 
 export async function registerUser(name: string, email: string, password: string): Promise<AuthUser> {
@@ -142,31 +201,61 @@ export async function issueReaderEmailVerification(email: string): Promise<{ ema
   const user = userResult.rows[0];
   if (!user || user.email_verified) return null;
   const code = String(randomInt(100000, 1000000));
-  await db.query(
+  const issuedCode = await db.query<{ user_id: string }>(
     `INSERT INTO reader_email_verification_otps (user_id, code_hash, expires_at)
      VALUES ($1, $2, now() + interval '10 minutes')
-     ON CONFLICT (user_id) DO UPDATE SET code_hash = EXCLUDED.code_hash, expires_at = EXCLUDED.expires_at, created_at = now()`,
-    [user.id, hashResetCode(code)],
+     ON CONFLICT (user_id) DO UPDATE SET
+       code_hash = EXCLUDED.code_hash,
+       expires_at = EXCLUDED.expires_at,
+       failed_attempts = 0,
+       locked_until = NULL,
+       created_at = now()
+     WHERE (reader_email_verification_otps.locked_until IS NULL OR reader_email_verification_otps.locked_until <= now())
+       AND reader_email_verification_otps.created_at <= now() - interval '30 seconds'
+     RETURNING user_id`,
+    [user.id, hashOneTimeCode(code, env.OTP_HASH_SECRET)],
   );
+  if (!issuedCode.rows[0]) {
+    return null;
+  }
   return { email: user.email, code };
 }
 
 export async function verifyReaderEmail(email: string, code: string): Promise<AuthUser> {
   const normalizedEmail = email.trim().toLowerCase();
+  const codeHash = hashOneTimeCode(code, env.OTP_HASH_SECRET);
   const result = await db.query<AuthUser>(
     `WITH consumed_code AS (
        DELETE FROM reader_email_verification_otps otp
        USING users u
        WHERE otp.user_id = u.id AND lower(u.email) = lower($1)
          AND otp.code_hash = $2 AND otp.expires_at > now()
+         AND otp.failed_attempts < 5
+         AND (otp.locked_until IS NULL OR otp.locked_until <= now())
        RETURNING otp.user_id
      )
      UPDATE users SET email_verified = true, updated_at = now()
      WHERE id IN (SELECT user_id FROM consumed_code)
      RETURNING id, name, email, role`,
-    [normalizedEmail, hashResetCode(code)],
+    [normalizedEmail, codeHash],
   );
   if (!result.rows[0]) {
+    await db.query(
+      `UPDATE reader_email_verification_otps otp
+       SET failed_attempts = otp.failed_attempts + 1,
+           locked_until = CASE
+             WHEN otp.failed_attempts + 1 >= 5 THEN now() + interval '15 minutes'
+             ELSE otp.locked_until
+           END
+       FROM users u
+       WHERE otp.user_id = u.id
+         AND lower(u.email) = lower($1)
+         AND otp.code_hash <> $2
+         AND otp.expires_at > now()
+         AND otp.failed_attempts < 5
+         AND (otp.locked_until IS NULL OR otp.locked_until <= now())`,
+      [normalizedEmail, codeHash],
+    );
     throw new AppError(400, 'invalid_or_expired_verification_code', 'That verification code is invalid or has expired. Request a new code and try again.');
   }
   return result.rows[0];
@@ -270,10 +359,6 @@ export async function authenticateGoogleUser(idToken: string): Promise<AuthUser>
   }
 }
 
-function hashResetCode(code: string): string {
-  return createHash('sha256').update(code).digest('hex');
-}
-
 export async function createPasswordReset(email: string): Promise<{ email: string; code: string } | null> {
   const normalizedEmail = email.trim().toLowerCase();
   const userResult = await db.query<{ id: string; email: string }>(
@@ -284,12 +369,21 @@ export async function createPasswordReset(email: string): Promise<{ email: strin
   if (!user) return null;
 
   const code = String(randomInt(100000, 1000000));
-  await db.query('DELETE FROM password_reset_otps WHERE user_id = $1', [user.id]);
-  await db.query(
+  const issuedCode = await db.query<{ user_id: string }>(
     `INSERT INTO password_reset_otps (user_id, code_hash, expires_at)
-     VALUES ($1, $2, now() + ($3 * interval '1 minute'))`,
-    [user.id, hashResetCode(code), env.PASSWORD_RESET_OTP_TTL_MINUTES],
+     VALUES ($1, $2, now() + ($3 * interval '1 minute'))
+     ON CONFLICT (user_id) DO UPDATE SET
+       code_hash = EXCLUDED.code_hash,
+       expires_at = EXCLUDED.expires_at,
+       failed_attempts = 0,
+       locked_until = NULL,
+       created_at = now()
+     WHERE (password_reset_otps.locked_until IS NULL OR password_reset_otps.locked_until <= now())
+       AND password_reset_otps.created_at <= now() - interval '30 seconds'
+     RETURNING user_id`,
+    [user.id, hashOneTimeCode(code, env.OTP_HASH_SECRET), env.PASSWORD_RESET_OTP_TTL_MINUTES],
   );
+  if (!issuedCode.rows[0]) return null;
   return { email: user.email, code };
 }
 
@@ -304,6 +398,39 @@ export async function discardPasswordReset(email: string): Promise<void> {
 
 export async function resetPassword(email: string, code: string, password: string): Promise<void> {
   const normalizedEmail = email.trim().toLowerCase();
+  const codeHash = hashOneTimeCode(code, env.OTP_HASH_SECRET);
+  const validOtp = await db.query<{ id: string }>(
+    `SELECT otp.user_id AS id
+     FROM password_reset_otps otp
+     JOIN users u ON otp.user_id = u.id
+     WHERE lower(u.email) = lower($1)
+       AND otp.code_hash = $2
+       AND otp.expires_at > now()
+       AND otp.failed_attempts < 5
+       AND (otp.locked_until IS NULL OR otp.locked_until <= now())
+     LIMIT 1`,
+    [normalizedEmail, codeHash],
+  );
+  if (!validOtp.rows[0]) {
+    await db.query(
+      `UPDATE password_reset_otps otp
+       SET failed_attempts = otp.failed_attempts + 1,
+           locked_until = CASE
+             WHEN otp.failed_attempts + 1 >= 5 THEN now() + interval '15 minutes'
+             ELSE otp.locked_until
+           END
+       FROM users u
+       WHERE otp.user_id = u.id
+         AND lower(u.email) = lower($1)
+         AND otp.code_hash <> $2
+         AND otp.expires_at > now()
+         AND otp.failed_attempts < 5
+         AND (otp.locked_until IS NULL OR otp.locked_until <= now())`,
+      [normalizedEmail, codeHash],
+    );
+    throw new AppError(400, 'invalid_or_expired_otp', 'That OTP is invalid or has expired.');
+  }
+
   const passwordHash = await hashPassword(password);
   const result = await db.query<{ id: string }>(
     `WITH consumed_otp AS (
@@ -313,13 +440,15 @@ export async function resetPassword(email: string, code: string, password: strin
          AND lower(u.email) = lower($1)
          AND otp.code_hash = $2
          AND otp.expires_at > now()
+         AND otp.failed_attempts < 5
+         AND (otp.locked_until IS NULL OR otp.locked_until <= now())
        RETURNING otp.user_id
      )
      UPDATE users
-     SET password_hash = $3, updated_at = now()
+     SET password_hash = $3, token_version = token_version + 1, updated_at = now()
      WHERE id IN (SELECT user_id FROM consumed_otp)
      RETURNING id`,
-    [normalizedEmail, hashResetCode(code), passwordHash],
+    [normalizedEmail, codeHash, passwordHash],
   );
   if (!result.rows[0]) {
     throw new AppError(400, 'invalid_or_expired_otp', 'That OTP is invalid or has expired.');
@@ -328,6 +457,14 @@ export async function resetPassword(email: string, code: string, password: strin
 
 export async function verifyAdminPassword(password: string) {
   if (env.ADMIN_PASSWORD_HASH) {
+    if (env.ADMIN_PASSWORD_HASH.startsWith('$argon2id$')) {
+      try {
+        return await argon2.verify(env.ADMIN_PASSWORD_HASH, password);
+      } catch {
+        return false;
+      }
+    }
+
     const [algorithm, salt, encodedHash] = env.ADMIN_PASSWORD_HASH.split('$');
     if (algorithm !== 'scrypt' || !salt || !encodedHash) return false;
     const derived = (await scrypt(password, Buffer.from(salt, 'base64'), 64)) as Buffer;
@@ -338,9 +475,12 @@ export async function verifyAdminPassword(password: string) {
 }
 
 export async function hashAdminPassword(password: string) {
-  const salt = randomBytes(16);
-  const derived = (await scrypt(password, salt, 64)) as Buffer;
-  return `scrypt$${salt.toString('base64')}$${derived.toString('base64')}`;
+  return argon2.hash(password, {
+    type: argon2.argon2id,
+    memoryCost: 65536,
+    timeCost: 3,
+    parallelism: 1,
+  });
 }
 
 export function getMockAdminUser(email = env.ADMIN_EMAIL) {

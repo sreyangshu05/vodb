@@ -60,6 +60,9 @@ export type FrontendMetricEvent = {
 };
 
 const MAX_SAMPLES = 256;
+const MAX_ENDPOINT_METRICS = 128;
+const ENDPOINT_OVERFLOW_KEY = 'OTHER <other>';
+const HTTP_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE']);
 const eventLoop = monitorEventLoopDelay({ resolution: 20 });
 eventLoop.enable();
 
@@ -152,12 +155,14 @@ function durationSnapshot(metric: DurationMetric) {
 function normalisePath(path: string) {
   return path
     .split('?')[0]
+    .replace(/\/(blogs|events)\/slug\/[^/]+/g, '/$1/slug/:slug')
     .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi, ':id')
     .replace(/\/\d+(?=\/|$)/g, '/:id');
 }
 
 function endpointKey(req: Request) {
-  return `${req.method} ${normalisePath(req.path)}`;
+  const method = HTTP_METHODS.has(req.method) ? req.method : 'OTHER';
+  return `${method} ${normalisePath(req.path)}`;
 }
 
 function operationName(value: string) {
@@ -226,7 +231,10 @@ export const metrics = {
     lifecycle = 'stopping';
   },
   requestStarted(req: Request) {
-    const key = endpointKey(req);
+    let key = endpointKey(req);
+    if (!endpoints.has(key) && endpoints.size >= MAX_ENDPOINT_METRICS - 1) {
+      key = ENDPOINT_OVERFLOW_KEY;
+    }
     const current = endpoints.get(key) ?? {
       ...newDurationMetric(),
       active: 0,

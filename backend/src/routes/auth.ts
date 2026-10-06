@@ -48,12 +48,20 @@ const savedPagePathSchema = z.object({
 });
 const authLimiter = createRateLimiter({
   windowMs: env.ADMIN_LOGIN_RATE_LIMIT_WINDOW_MS,
-  max: env.ADMIN_LOGIN_RATE_LIMIT_MAX_REQUESTS,
+  max: env.ADMIN_LOGIN_RATE_LIMIT_MAX_REQUESTS * 6,
+  identityMax: env.ADMIN_LOGIN_RATE_LIMIT_MAX_REQUESTS,
+  shared: true,
+  keyPrefix: 'auth',
+  identity: (req) => typeof req.body?.email === 'string' ? req.body.email : undefined,
   message: 'Too many authentication attempts. Please retry later.',
 });
 const signupLimiter = createRateLimiter({
   windowMs: env.SIGNUP_RATE_LIMIT_WINDOW_MS,
-  max: env.SIGNUP_RATE_LIMIT_MAX_REQUESTS,
+  max: env.SIGNUP_RATE_LIMIT_MAX_REQUESTS * 6,
+  identityMax: env.SIGNUP_RATE_LIMIT_MAX_REQUESTS,
+  shared: true,
+  keyPrefix: 'signup',
+  identity: (req) => typeof req.body?.email === 'string' ? req.body.email : undefined,
   message: 'Too many signup attempts from this network. Please try again later.',
 });
 
@@ -86,7 +94,7 @@ router.post('/verify-email', authLimiter, async (req, res, next) => {
   try {
     const payload = verifyEmailSchema.parse(req.body ?? {});
     const user = await verifyReaderEmail(payload.email, payload.code);
-    res.json({ token: signToken(user), user });
+    res.json({ token: await signToken(user), user });
   } catch (error) {
     if (error instanceof z.ZodError) return next(new AppError(422, 'invalid_payload', 'Enter a valid email and six-digit verification code.'));
     next(error);
@@ -109,7 +117,7 @@ router.post('/login', authLimiter, async (req, res, next) => {
   try {
     const payload = credentialsSchema.parse(req.body ?? {});
     const user = await authenticateUser(payload.email, payload.password);
-    res.json({ token: signToken(user), user });
+    res.json({ token: await signToken(user), user });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return next(new AppError(401, 'invalid_credentials', 'Email or password is incorrect.'));
@@ -122,7 +130,7 @@ router.post('/google', authLimiter, async (req, res, next) => {
   try {
     const payload = googleAuthSchema.parse(req.body ?? {});
     const user = await authenticateGoogleUser(payload.idToken);
-    res.json({ token: signToken(user), user });
+    res.json({ token: await signToken(user), user });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return next(new AppError(401, 'invalid_google_token', 'Google sign-in could not be verified.'));
@@ -140,7 +148,7 @@ router.post('/forgot-password', authLimiter, async (req, res, next) => {
         await sendPasswordResetOtp(reset.email, reset.code);
       } catch {
         await discardPasswordReset(reset.email);
-        logger.warn('password_reset_delivery_failed');
+        logger.warn('password_reset_delivery_failed', { requestId: req.get('x-request-id') });
       }
     }
     res.status(202).json({ message: 'If an account exists for that email, a password reset OTP has been sent.' });
@@ -213,7 +221,7 @@ router.patch('/me', requireAuth, async (req, res, next) => {
     );
     if (!result.rows[0]) throw new AppError(404, 'account_not_found', 'Account not found.');
     const user = result.rows[0];
-    res.json({ token: signToken(user), user });
+    res.json({ token: await signToken(user), user });
   } catch (error) {
     if (error instanceof z.ZodError) return next(new AppError(422, 'invalid_profile', 'Enter a name between 2 and 120 characters.', { issues: error.issues }));
     next(error);
