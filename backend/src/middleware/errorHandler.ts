@@ -6,6 +6,13 @@ function isDatabaseUnavailable(error: unknown): boolean {
   return error instanceof Error && /ECONNREFUSED|connect ECONNREFUSED|password authentication failed|database.*(not|is).*available|timeout of|connection.*refused|connection terminated|could not connect to server|server.*(down|unavailable)|FATAL/i.test(error.message);
 }
 
+function isDatabaseSchemaUnavailable(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const code = 'code' in error ? error.code : undefined;
+  if (code === '42P01' || code === '42703' || code === '3F000') return true;
+  return error instanceof Error && /relation .* does not exist|column .* does not exist|schema .* does not exist/i.test(error.message);
+}
+
 export function notFoundHandler(_req: Request, res: Response) {
   res.status(404).json({ error: 'not_found', message: 'Resource not found.' });
 }
@@ -29,6 +36,19 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     return res.status(503).json({
       error: 'service_unavailable',
       message: 'The service is temporarily unavailable. Please try again later.',
+    });
+  }
+
+  if (isDatabaseSchemaUnavailable(err)) {
+    const code = err && typeof err === 'object' && 'code' in err ? err.code : undefined;
+    logger.error('database_schema_unavailable', {
+      ...requestContext,
+      code,
+      message: err instanceof Error ? err.message : 'Required database schema is missing',
+    });
+    return res.status(503).json({
+      error: 'database_schema_unavailable',
+      message: 'The service database needs an update. Please try again later or contact the site administrator.',
     });
   }
 

@@ -47,12 +47,25 @@ export const db = {
     return runQuery<T>(text, params);
   },
   async healthcheck() {
-    const result = await runQuery<{ now: string; has_rate_limit_buckets: boolean }>(
+    const result = await runQuery<{
+      now: string;
+      has_rate_limit_buckets: boolean;
+      has_google_auth_columns: boolean;
+    }>(
       `SELECT NOW() AS now,
-              to_regclass('public.rate_limit_buckets') IS NOT NULL AS has_rate_limit_buckets`,
+              to_regclass('public.rate_limit_buckets') IS NOT NULL AS has_rate_limit_buckets,
+              (SELECT count(*) = 3
+                 FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'users'
+                  AND column_name IN ('auth_provider', 'google_subject', 'email_verified'))
+                AS has_google_auth_columns`,
     );
     if (!result.rows[0]?.has_rate_limit_buckets) {
       throw new Error('Database schema is missing rate_limit_buckets; apply migration 016_reliability_controls.sql.');
+    }
+    if (!result.rows[0]?.has_google_auth_columns) {
+      throw new Error('Database schema is missing Google authentication fields; apply migrations 006_add_google_auth.sql and 014_require_verified_reader_email.sql.');
     }
     return result.rows[0];
   },
