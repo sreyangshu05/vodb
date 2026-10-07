@@ -105,9 +105,9 @@ app.get('/api/v1/readiness', async (_req, res) => {
 // cannot exhaust the public content request budget.
 app.use('/api/v1/media', mediaRouter);
 app.use('/api/v1/auth', authRouter);
+app.use('/api/v1/observability', observabilityRouter);
 app.use('/api/v1', publicRouter);
 app.use('/api/v1/admin', adminRouter);
-app.use('/api/v1/observability', observabilityRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
