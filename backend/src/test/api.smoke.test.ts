@@ -147,13 +147,11 @@ test('account deletion requires confirmation and cannot delete admin identities'
   assert.equal(adminDeletion.body.error, 'account_deletion_unavailable');
 });
 
-test('Google sign-in identifies a token issued for another OAuth client', {
-  skip: env.GOOGLE_CLIENT_ID ? false : 'GOOGLE_CLIENT_ID is not configured for this test environment',
-}, async () => {
+test('Google sign-in identifies a token issued for another OAuth client before database access', async () => {
   const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
   const mismatchedToken = [
     encode({ alg: 'RS256', typ: 'JWT' }),
-    encode({ aud: 'different-oauth-client.apps.googleusercontent.com' }),
+    encode({ aud: env.GOOGLE_CLIENT_ID ? 'different-oauth-client.apps.googleusercontent.com' : 'unconfigured-client.apps.googleusercontent.com' }),
     'test-signature',
   ].join('.');
 
@@ -161,9 +159,9 @@ test('Google sign-in identifies a token issued for another OAuth client', {
     .post('/api/v1/auth/google')
     .send({ idToken: mismatchedToken });
 
-  assert.equal(res.status, 401);
-  assert.equal(res.body.error, 'google_client_mismatch');
-  assert.match(res.body.message, /backend expects/);
+  assert.equal(res.status, env.GOOGLE_CLIENT_ID ? 401 : 503);
+  assert.equal(res.body.error, env.GOOGLE_CLIENT_ID ? 'google_client_mismatch' : 'google_auth_unavailable');
+  if (env.GOOGLE_CLIENT_ID) assert.match(res.body.message, /backend expects/);
 });
 
 test('GET /api/v1/readiness reports database availability', async () => {
@@ -214,6 +212,16 @@ test('observability exposes live backend, frontend, process, and database metric
   assert.equal(res.body.frontend.webVitals.FCP.count >= 1, true);
   assert.equal(typeof res.body.database.p95Ms, 'number');
   assert.equal(typeof res.body.database.readiness.status, 'string');
+});
+
+test('frontend telemetry stays available when the shared rate-limit table is not installed', async () => {
+  const responses = await Promise.all(
+    Array.from({ length: 5 }, () => request(app)
+      .post('/api/v1/observability/frontend')
+      .send({ kind: 'web_vital', name: 'FCP', value: 123.4, path: '/' })),
+  );
+
+  assert.deepEqual(responses.map((response) => response.status), [204, 204, 204, 204, 204]);
 });
 
 test('GET /api/v1/blogs fails with 503 when the database is unavailable', async () => {

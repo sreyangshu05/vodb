@@ -20,6 +20,7 @@ const frontendMetricSchema = z.object({
 const frontendMetricLimiter = createRateLimiter({
   windowMs: 60_000,
   max: 300,
+  shared: false,
   message: 'Frontend telemetry limit reached. Please try again later.',
 });
 

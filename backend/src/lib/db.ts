@@ -47,7 +47,13 @@ export const db = {
     return runQuery<T>(text, params);
   },
   async healthcheck() {
-    const result = await runQuery<{ now: string }>('SELECT NOW() as now');
+    const result = await runQuery<{ now: string; has_rate_limit_buckets: boolean }>(
+      `SELECT NOW() AS now,
+              to_regclass('public.rate_limit_buckets') IS NOT NULL AS has_rate_limit_buckets`,
+    );
+    if (!result.rows[0]?.has_rate_limit_buckets) {
+      throw new Error('Database schema is missing rate_limit_buckets; apply migration 016_reliability_controls.sql.');
+    }
     return result.rows[0];
   },
   poolStats() {
