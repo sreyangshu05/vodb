@@ -12,7 +12,7 @@ const frontendMetricSchema = z.object({
   path: z.string().trim().min(1).max(300).optional(),
   status: z.number().int().min(0).max(999).optional(),
   durationMs: z.number().finite().min(0).max(120000).optional(),
-  name: z.string().trim().min(1).max(80).optional(),
+  name: z.enum(['FCP', 'LCP', 'FID', 'INP', 'CLS']).optional(),
   value: z.number().finite().min(0).max(120000).optional(),
   metadata: z.record(z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
 });

@@ -1,16 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import { AppError } from '../utils/errors.js';
+import { isDatabaseConfigurationError, isDatabaseUnavailable } from '../utils/databaseErrors.js';
 import { logger } from '../utils/logger.js';
-
-export function isDatabaseUnavailable(error: unknown): boolean {
-  if (error && typeof error === 'object' && 'code' in error) {
-    const code = error.code;
-    if (typeof code === 'string' && (code.startsWith('08') || ['53300', '57P01', '57P02', '57P03'].includes(code))) {
-      return true;
-    }
-  }
-  return error instanceof Error && /ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EPIPE|connect ECONNREFUSED|password authentication failed|database.*(not|is).*available|timeout of|connection.*refused|connection terminated|could not connect to server|server.*(down|unavailable)|FATAL/i.test(error.message);
-}
 
 function safeErrorMetadata(error: unknown) {
   if (!error || typeof error !== 'object') return { errorName: 'UnknownError' };
@@ -61,6 +52,14 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     return res.status(503).json({
       error: 'service_unavailable',
       message: 'The service is temporarily unavailable. Please try again later.',
+    });
+  }
+
+  if (isDatabaseConfigurationError(err)) {
+    logger.error('database_configuration_error', { ...requestContext, ...safeErrorMetadata(err) });
+    return res.status(503).json({
+      error: 'service_unavailable',
+      message: 'The service is temporarily unavailable. Please contact the site administrator.',
     });
   }
 

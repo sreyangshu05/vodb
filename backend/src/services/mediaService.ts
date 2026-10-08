@@ -36,7 +36,7 @@ function verify(token: string) {
 
 export async function createMediaAccess(mediaId: string, userId: string, request: { ip?: string; userAgent?: string }) {
   const result = await db.query<MediaRow>(
-    'SELECT id, storage_url, mime_type, title FROM protected_media WHERE id = $1 AND is_active = TRUE AND (owner_user_id IS NULL OR owner_user_id = $2)',
+    'SELECT id, storage_url, mime_type, title FROM protected_media WHERE id = $1 AND is_active = TRUE AND (owner_user_id = $2 OR is_shared = TRUE)',
     [mediaId, userId],
   );
   const media = result.rows[0];

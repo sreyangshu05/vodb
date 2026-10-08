@@ -1,15 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { db } from '../lib/db.js';
 import { AppError } from '../utils/errors.js';
+import { isDatabaseUnavailable } from '../utils/databaseErrors.js';
 import { emailSchema } from '../lib/validators.js';
 import type { ContactInquiryInput, NewsletterSubscriptionInput } from '../types/api.js';
-
-function isDbUnavailable(error: unknown): boolean {
-  return error instanceof Error && (
-    /ECONNREFUSED|connect ECONNREFUSED|password authentication failed|authentication failed|database.*(not|is).*available|timeout of|connection.*refused|connection terminated|could not connect to server|server.*(down|unavailable)|FATAL/i.test(error.message) ||
-    /Client has encountered a connection error|password authentication failed|could not connect to server/i.test(String(error))
-  );
-}
 
 export async function createNewsletterSubscription(input: NewsletterSubscriptionInput) {
   const email = emailSchema.parse(input.email);
@@ -52,7 +46,7 @@ export async function createNewsletterSubscription(input: NewsletterSubscription
       throw error;
     }
 
-    if (isDbUnavailable(error)) {
+    if (isDatabaseUnavailable(error)) {
       throw new AppError(503, 'subscription_service_unavailable', 'The newsletter service is temporarily unavailable.');
     }
 
@@ -224,7 +218,7 @@ export async function createContactInquiry(input: ContactInquiryInput, idempoten
     return { id: prior.id, status: prior.status, replayed: true };
   } catch (error) {
     if (error instanceof AppError) throw error;
-    if (isDbUnavailable(error)) {
+    if (isDatabaseUnavailable(error)) {
       throw new AppError(503, 'contact_service_unavailable', 'The contact service is temporarily unavailable.');
     }
 

@@ -62,6 +62,7 @@ export type FrontendMetricEvent = {
 const MAX_SAMPLES = 256;
 const MAX_ENDPOINT_METRICS = 128;
 const ENDPOINT_OVERFLOW_KEY = 'OTHER <other>';
+const SUPPORTED_WEB_VITALS = new Set(['FCP', 'LCP', 'FID', 'INP', 'CLS']);
 const HTTP_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE']);
 const eventLoop = monitorEventLoopDelay({ resolution: 20 });
 eventLoop.enable();
@@ -321,6 +322,7 @@ export const metrics = {
       return;
     }
     if (event.kind === 'web_vital' && event.name) {
+      if (!SUPPORTED_WEB_VITALS.has(event.name)) return;
       const vital = frontend.webVitals[event.name] ?? newDurationMetric();
       addSample(vital, Number.isFinite(event.value) ? event.value ?? 0 : durationMs);
       frontend.webVitals[event.name] = vital;

@@ -14,16 +14,19 @@ const maxImagePixels = 25_000_000;
 const uploadJsonParser = json({ limit: '7mb' });
 
 function sendPublicImage(req: Request, res: Response, image: {
+  id: string;
+  created_at: string;
   image_data: Buffer;
   mime_type: string;
   byte_size: number;
 }) {
-  const etag = `"${createHash('sha256').update(image.image_data).digest('base64url')}"`;
+  const etag = createPublicImageEtag(image.id, image.byte_size, image.created_at);
   res.set({
     'Content-Type': image.mime_type,
     'Content-Length': String(image.byte_size),
     'Cache-Control': 'public, max-age=300, stale-while-revalidate=60',
     ETag: etag,
+    'Last-Modified': new Date(image.created_at).toUTCString(),
     'X-Content-Type-Options': 'nosniff',
     'Content-Disposition': 'inline',
   });
@@ -32,6 +35,26 @@ function sendPublicImage(req: Request, res: Response, image: {
     return;
   }
   res.send(image.image_data);
+}
+
+function createPublicImageEtag(id: string, byteSize: number, createdAt: string): string {
+  const metadataHash = createHash('sha256').update(`${id}:${byteSize}:${createdAt}`).digest('base64url');
+  return `"${metadataHash}"`;
+}
+
+function setPublicImageValidators(res: Response, image: { id: string; created_at: string; mime_type: string; byte_size: number }) {
+  res.set({
+    'Content-Type': image.mime_type,
+    'Cache-Control': 'public, max-age=300, stale-while-revalidate=60',
+    ETag: createPublicImageEtag(image.id, image.byte_size, image.created_at),
+    'Last-Modified': new Date(image.created_at).toUTCString(),
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Disposition': 'inline',
+  });
+}
+
+function hasCacheValidators(req: Request): boolean {
+  return Boolean(req.get('if-none-match') || req.get('if-modified-since'));
 }
 
 router.post('/upload', requireAuth, requireAdmin, uploadJsonParser, async (req, res, next) => {
@@ -79,15 +102,29 @@ router.post('/upload', requireAuth, requireAdmin, uploadJsonParser, async (req, 
       [originalName, match[1], normalizedBytes.length, normalizedBytes, typeof altText === 'string' ? altText.trim() : ''],
     );
     const id = result.rows[0]!.id;
-    res.status(201).json({ id, url: `/api/v1/media/${id}`, mimeType: match[1], byteSize: bytes.length, altText: altText ?? '' });
+    res.status(201).json({ id, url: `/api/v1/media/${id}`, mimeType: match[1], byteSize: normalizedBytes.length, altText: altText ?? '' });
   } catch (error) { next(error); }
 });
 
 router.get('/source', async (req, res, next) => {
   try {
     const sourcePath = z.string().trim().min(1).max(500).parse(req.query.path);
-    const result = await db.query<{ id: string; image_data: Buffer; mime_type: string; byte_size: number }>(
-      'SELECT id, image_data, mime_type, byte_size FROM media_assets WHERE source_path = $1', [sourcePath],
+    if (hasCacheValidators(req)) {
+      const metadata = await db.query<{ id: string; mime_type: string; byte_size: number; created_at: string }>(
+        'SELECT id, mime_type, byte_size, created_at FROM media_assets WHERE source_path = $1',
+        [sourcePath],
+      );
+      const imageMetadata = metadata.rows[0];
+      if (!imageMetadata) throw new AppError(404, 'image_not_found', 'Site image has not been imported into the database.');
+      setPublicImageValidators(res, imageMetadata);
+      if (req.fresh) {
+        res.status(304).end();
+        return;
+      }
+    }
+    const result = await db.query<{ id: string; created_at: string; image_data: Buffer; mime_type: string; byte_size: number }>(
+      'SELECT id, created_at, image_data, mime_type, byte_size FROM media_assets WHERE source_path = $1',
+      [sourcePath],
     );
     const image = result.rows[0];
     if (!image) throw new AppError(404, 'image_not_found', 'Site image has not been imported into the database.');
@@ -114,13 +151,30 @@ router.get('/:id', async (req, res, next) => {
   try {
     const parsed = mediaId.safeParse(req.params.id);
     if (!parsed.success) throw new AppError(400, 'invalid_media_id', 'Media id must be a UUID.');
-    const result = await db.query<{ image_data: Buffer; mime_type: string; byte_size: number; alt_text: string }>(
-      `SELECT m.image_data, m.mime_type, m.byte_size, m.alt_text
+    const publishedImagePredicate = `m.id = $1 AND (
+       EXISTS (SELECT 1 FROM blog_posts b WHERE b.image_media_id = m.id AND b.published = TRUE AND b.moderation_status = 'approved') OR
+       EXISTS (SELECT 1 FROM events e WHERE e.image_media_id = m.id AND e.published = TRUE AND e.moderation_status = 'approved')
+     )`;
+    if (hasCacheValidators(req)) {
+      const metadata = await db.query<{ id: string; created_at: string; mime_type: string; byte_size: number }>(
+        `SELECT m.id, m.created_at, m.mime_type, m.byte_size
        FROM media_assets m
-       WHERE m.id = $1 AND (
-         EXISTS (SELECT 1 FROM blog_posts b WHERE b.image_media_id = m.id AND b.published = TRUE AND b.moderation_status = 'approved') OR
-         EXISTS (SELECT 1 FROM events e WHERE e.image_media_id = m.id AND e.published = TRUE AND e.moderation_status = 'approved')
-       )`, [parsed.data],
+       WHERE ${publishedImagePredicate}`,
+        [parsed.data],
+      );
+      const imageMetadata = metadata.rows[0];
+      if (!imageMetadata) throw new AppError(404, 'image_not_found', 'Published image not found.');
+      setPublicImageValidators(res, imageMetadata);
+      if (req.fresh) {
+        res.status(304).end();
+        return;
+      }
+    }
+    const result = await db.query<{ id: string; created_at: string; image_data: Buffer; mime_type: string; byte_size: number }>(
+      `SELECT m.id, m.created_at, m.image_data, m.mime_type, m.byte_size
+       FROM media_assets m
+       WHERE ${publishedImagePredicate}`,
+      [parsed.data],
     );
     const image = result.rows[0];
     if (!image) throw new AppError(404, 'image_not_found', 'Published image not found.');

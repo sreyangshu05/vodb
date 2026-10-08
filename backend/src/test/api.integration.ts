@@ -7,6 +7,7 @@ import { db } from '../lib/db.js';
 import { waitForAuditWrites } from '../services/auditService.js';
 import { env } from '../config/env.js';
 import { createPasswordReset, signToken } from '../services/authService.js';
+import { createMediaAccess } from '../services/mediaService.js';
 import { createNewsletterSubscription } from '../services/submissionService.js';
 
 const integrationEnabled = process.env.BACKEND_TEST_DATABASE_MODE === 'available';
@@ -161,6 +162,70 @@ test('password reset refreshes the active matching session while revoking its ol
     assert.equal(refreshedSession.status, 200);
   } finally {
     if (userId) await db.query('DELETE FROM users WHERE id = $1', [userId]);
+  }
+});
+
+test('protected media requires explicit sharing when it has no owner', {
+  skip: integrationEnabled ? false : 'set BACKEND_TEST_DATABASE_MODE=available to run database integration tests',
+}, async () => {
+  const email = `protected-media-${Date.now()}@example.com`;
+  let userId: string | undefined;
+  let mediaId: string | undefined;
+
+  try {
+    const userResult = await db.query<{ id: string }>(
+      `INSERT INTO users (name, email, password_hash, email_verified)
+       VALUES ('Protected Media Test', $1, 'test-hash', TRUE)
+       RETURNING id`,
+      [email],
+    );
+    userId = userResult.rows[0]!.id;
+    const mediaResult = await db.query<{ id: string }>(
+      `INSERT INTO protected_media (title, storage_url, mime_type, owner_user_id)
+       VALUES ('Protected Media Test', 'https://example.com/protected.png', 'image/png', NULL)
+       RETURNING id`,
+    );
+    mediaId = mediaResult.rows[0]!.id;
+
+    await assert.rejects(
+      createMediaAccess(mediaId, userId, {}),
+      (error: unknown) => error instanceof Error && 'error' in error && error.error === 'media_not_found',
+    );
+
+    await db.query('UPDATE protected_media SET is_shared = TRUE WHERE id = $1', [mediaId]);
+    const access = await createMediaAccess(mediaId, userId, {});
+    assert.equal(access.media.id, mediaId);
+    assert.equal(typeof access.token, 'string');
+  } finally {
+    if (mediaId) await db.query('DELETE FROM protected_media WHERE id = $1', [mediaId]);
+    if (userId) await db.query('DELETE FROM users WHERE id = $1', [userId]);
+  }
+});
+
+test('public image cache hits return a 304 without the image response body', {
+  skip: integrationEnabled ? false : 'set BACKEND_TEST_DATABASE_MODE=available to run database integration tests',
+}, async () => {
+  const id = randomUUID();
+  const sourcePath = `/test/${id}.png`;
+
+  try {
+    await db.query(
+      `INSERT INTO media_assets (original_name, mime_type, byte_size, image_data, source_path)
+       VALUES ($1, 'image/png', 8, $2, $3)`,
+      [`${id}.png`, Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), sourcePath],
+    );
+    const firstResponse = await request(app).get('/api/v1/media/source').query({ path: sourcePath });
+    assert.equal(firstResponse.status, 200);
+    assert.ok(firstResponse.headers.etag);
+
+    const cachedResponse = await request(app)
+      .get('/api/v1/media/source')
+      .query({ path: sourcePath })
+      .set('If-None-Match', firstResponse.headers.etag);
+    assert.equal(cachedResponse.status, 304);
+    assert.equal(cachedResponse.text, '');
+  } finally {
+    await db.query('DELETE FROM media_assets WHERE source_path = $1', [sourcePath]);
   }
 });
 
