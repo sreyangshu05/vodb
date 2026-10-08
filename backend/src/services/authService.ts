@@ -396,7 +396,7 @@ export async function discardPasswordReset(email: string): Promise<void> {
   );
 }
 
-export async function resetPassword(email: string, code: string, password: string): Promise<void> {
+export async function resetPassword(email: string, code: string, password: string): Promise<AuthUser> {
   const normalizedEmail = email.trim().toLowerCase();
   const codeHash = hashOneTimeCode(code, env.OTP_HASH_SECRET);
   const validOtp = await db.query<{ id: string }>(
@@ -432,7 +432,7 @@ export async function resetPassword(email: string, code: string, password: strin
   }
 
   const passwordHash = await hashPassword(password);
-  const result = await db.query<{ id: string }>(
+  const result = await db.query<AuthUser>(
     `WITH consumed_otp AS (
        DELETE FROM password_reset_otps otp
        USING users u
@@ -447,12 +447,13 @@ export async function resetPassword(email: string, code: string, password: strin
      UPDATE users
      SET password_hash = $3, token_version = token_version + 1, updated_at = now()
      WHERE id IN (SELECT user_id FROM consumed_otp)
-     RETURNING id`,
+     RETURNING id, name, email, role`,
     [normalizedEmail, codeHash, passwordHash],
   );
   if (!result.rows[0]) {
     throw new AppError(400, 'invalid_or_expired_otp', 'That OTP is invalid or has expired.');
   }
+  return result.rows[0];
 }
 
 export async function verifyAdminPassword(password: string) {

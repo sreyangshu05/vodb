@@ -44,6 +44,11 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
   }
 }
 
+export async function optionalAuth(req: Request, res: Response, next: NextFunction) {
+  if (!req.headers.authorization) return next();
+  return requireAuth(req, res, next);
+}
+
 export function requireAdmin(req: Request, res: Response, next: NextFunction) {
   if (!req.user || req.user.role !== 'admin') {
     return next(new AppError(403, 'forbidden', 'Admin access is required.'));

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { createRateLimiter } from '../middleware/rateLimit.js';
-import { requireAuth } from '../middleware/auth.js';
+import { optionalAuth, requireAuth } from '../middleware/auth.js';
 import { env } from '../config/env.js';
 import { AppError } from '../utils/errors.js';
 import { authenticateGoogleUser, authenticateUser, createPasswordReset, discardPasswordReset, issueReaderEmailVerification, registerUser, resetPassword, signToken, verifyReaderEmail, verifySignupChallenge } from '../services/authService.js';
@@ -172,11 +172,15 @@ router.post('/forgot-password', authLimiter, async (req, res, next) => {
   }
 });
 
-router.post('/reset-password', authLimiter, async (req, res, next) => {
+router.post('/reset-password', authLimiter, optionalAuth, async (req, res, next) => {
   try {
     const payload = resetPasswordSchema.parse(req.body ?? {});
-    await resetPassword(payload.email, payload.otp, payload.password);
-    res.json({ message: 'Your password has been reset. You can now sign in.' });
+    const user = await resetPassword(payload.email, payload.otp, payload.password);
+    if (req.user?.id === user.id) {
+      res.json({ message: 'Your password has been reset.', token: await signToken(user), user });
+      return;
+    }
+    res.json({ message: 'Your password has been reset.' });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return next(new AppError(422, 'invalid_payload', 'Email, a six-digit OTP, and a valid password are required.', { issues: error.issues }));

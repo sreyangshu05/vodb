@@ -6,7 +6,7 @@ import app from '../server.js';
 import { db } from '../lib/db.js';
 import { waitForAuditWrites } from '../services/auditService.js';
 import { env } from '../config/env.js';
-import { signToken } from '../services/authService.js';
+import { createPasswordReset, signToken } from '../services/authService.js';
 import { createNewsletterSubscription } from '../services/submissionService.js';
 
 const integrationEnabled = process.env.BACKEND_TEST_DATABASE_MODE === 'available';
@@ -118,6 +118,47 @@ test('a revoked account token stops authenticating while a newly signed token re
       .get('/api/v1/auth/me')
       .set('Authorization', `Bearer ${currentToken}`);
     assert.equal(current.status, 200);
+  } finally {
+    if (userId) await db.query('DELETE FROM users WHERE id = $1', [userId]);
+  }
+});
+
+test('password reset refreshes the active matching session while revoking its old token', {
+  skip: integrationEnabled ? false : 'set BACKEND_TEST_DATABASE_MODE=available to run database integration tests',
+}, async () => {
+  const email = `password-reset-session-${Date.now()}@example.com`;
+  let userId: string | undefined;
+
+  try {
+    const created = await db.query<{ id: string; name: string; email: string; role: 'member' }>(
+      `INSERT INTO users (name, email, password_hash, email_verified)
+       VALUES ('Password Reset Session Test', $1, 'test-hash', TRUE)
+       RETURNING id, name, email, role`,
+      [email],
+    );
+    const user = created.rows[0]!;
+    userId = user.id;
+    const oldToken = await signToken(user);
+    const reset = await createPasswordReset(email);
+    assert.ok(reset);
+
+    const response = await request(app)
+      .post('/api/v1/auth/reset-password')
+      .set('Authorization', `Bearer ${oldToken}`)
+      .send({ email, otp: reset.code, password: 'new-password-123' });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.user.id, user.id);
+    assert.equal(typeof response.body.token, 'string');
+
+    const oldSession = await request(app)
+      .get('/api/v1/auth/me')
+      .set('Authorization', `Bearer ${oldToken}`);
+    const refreshedSession = await request(app)
+      .get('/api/v1/auth/me')
+      .set('Authorization', `Bearer ${response.body.token as string}`);
+    assert.equal(oldSession.status, 401);
+    assert.equal(refreshedSession.status, 200);
   } finally {
     if (userId) await db.query('DELETE FROM users WHERE id = $1', [userId]);
   }
