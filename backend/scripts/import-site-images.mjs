@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import dotenv from 'dotenv';
+import { createMaintenanceDatabaseConfig } from './database-connection.mjs';
 
 const { Pool } = pg;
 const backendRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -19,23 +20,7 @@ function validSignature(bytes, mime) {
   return bytes.length >= 12 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP';
 }
 
-const connectionString = process.env.DIRECT_DATABASE_URL || process.env.DATABASE_URL;
-if (connectionString) {
-  const hostname = new URL(connectionString).hostname;
-  if (!process.env.DIRECT_DATABASE_URL && hostname.includes('-pooler')) {
-    throw new Error("Set DIRECT_DATABASE_URL to Neon's direct connection string before importing images.");
-  }
-}
-const pool = new Pool(connectionString
-  ? { connectionString, max: 2, connectionTimeoutMillis: 10000 }
-  : {
-      host: process.env.POSTGRES_HOST || '127.0.0.1',
-      port: Number(process.env.POSTGRES_PORT || 5433),
-      database: process.env.POSTGRES_DB || 'appdb',
-      user: process.env.POSTGRES_USER || 'postgres',
-      password: process.env.POSTGRES_PASSWORD,
-      ssl: process.env.POSTGRES_SSL === 'true' ? { rejectUnauthorized: false } : false,
-    });
+const pool = new Pool(createMaintenanceDatabaseConfig(process.env, 2));
 
 try {
   const paths = (await readFile(manifestPath, 'utf8')).replace(/^\uFEFF/, '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
