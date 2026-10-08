@@ -1,5 +1,6 @@
-import { Router } from 'express';
+import { Router, json, type Request, type Response } from 'express';
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { createMediaAccess, resolveMediaToken } from '../services/mediaService.js';
 import { AppError } from '../utils/errors.js';
@@ -10,8 +11,30 @@ const router = Router();
 const mediaId = z.string().uuid();
 const maxImageBytes = 5 * 1024 * 1024;
 const maxImagePixels = 25_000_000;
+const uploadJsonParser = json({ limit: '7mb' });
 
-router.post('/upload', requireAuth, requireAdmin, async (req, res, next) => {
+function sendPublicImage(req: Request, res: Response, image: {
+  image_data: Buffer;
+  mime_type: string;
+  byte_size: number;
+}) {
+  const etag = `"${createHash('sha256').update(image.image_data).digest('base64url')}"`;
+  res.set({
+    'Content-Type': image.mime_type,
+    'Content-Length': String(image.byte_size),
+    'Cache-Control': 'public, max-age=300, stale-while-revalidate=60',
+    ETag: etag,
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Disposition': 'inline',
+  });
+  if (req.fresh) {
+    res.status(304).end();
+    return;
+  }
+  res.send(image.image_data);
+}
+
+router.post('/upload', requireAuth, requireAdmin, uploadJsonParser, async (req, res, next) => {
   try {
     const { data, mimeType, fileName, altText } = req.body ?? {};
     if (typeof data !== 'string' || data.length > Math.ceil(maxImageBytes * 4 / 3) + 16) {
@@ -68,8 +91,7 @@ router.get('/source', async (req, res, next) => {
     );
     const image = result.rows[0];
     if (!image) throw new AppError(404, 'image_not_found', 'Site image has not been imported into the database.');
-    res.set({ 'Content-Type': image.mime_type, 'Content-Length': String(image.byte_size), 'Cache-Control': 'public, max-age=86400, immutable', 'X-Content-Type-Options': 'nosniff', 'Content-Disposition': 'inline' });
-    res.send(image.image_data);
+    sendPublicImage(req, res, image);
   } catch (error) {
     if (error instanceof z.ZodError) return next(new AppError(400, 'invalid_image_path', 'A valid image path is required.'));
     next(error);
@@ -102,8 +124,7 @@ router.get('/:id', async (req, res, next) => {
     );
     const image = result.rows[0];
     if (!image) throw new AppError(404, 'image_not_found', 'Published image not found.');
-    res.set({ 'Content-Type': image.mime_type, 'Content-Length': String(image.byte_size), 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Disposition': 'inline' });
-    res.send(image.image_data);
+    sendPublicImage(req, res, image);
   } catch (error) { next(error); }
 });
 

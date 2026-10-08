@@ -72,8 +72,14 @@ app.use(helmet({
     },
   },
 }));
-app.use(express.json({ limit: '7mb' }));
 app.use(morgan((tokens, req, res) => `${tokens.method(req, res)} ${req.path} ${tokens.status(req, res)} ${tokens['response-time'](req, res)} ms`));
+const standardJsonParser = express.json({ limit: '1mb' });
+app.use((req, res, next) => {
+  if (req.method === 'POST' && req.path.replace(/\/+$/, '') === '/api/v1/media/upload') {
+    return next();
+  }
+  return standardJsonParser(req, res, next);
+});
 
 app.get('/', (_req, res) => {
   res.json({ service: 'voice-of-digi-bengal-backend', status: 'ok' });

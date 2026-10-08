@@ -30,6 +30,7 @@ export function createRateLimiter({
 }: RateLimitOptions) {
   const hits = new Map<string, { count: number; resetAt: number }>();
   let lastCleanup = 0;
+  const maxLocalBuckets = 10_000;
 
   return async (req: Request, res: Response, next: NextFunction) => {
     const keys = [{ key: `${keyPrefix}:ip:${deriveClientKey(req)}`, max }];
@@ -82,7 +83,24 @@ export function createRateLimiter({
       }
 
       for (const { key, max: bucketMax } of keys) {
-        const current = hits.get(key);
+        let current = hits.get(key);
+        if (!current && hits.size >= maxLocalBuckets) {
+          if (now - lastCleanup > 1000) {
+            for (const [entryKey, entry] of hits) {
+              if (entry.resetAt <= now) hits.delete(entryKey);
+            }
+            lastCleanup = now;
+          }
+          if (hits.size >= maxLocalBuckets) {
+            let nextResetAt = Number.POSITIVE_INFINITY;
+            for (const entry of hits.values()) {
+              nextResetAt = Math.min(nextResetAt, entry.resetAt);
+            }
+            res.setHeader('Retry-After', String(Math.max(1, Math.ceil((nextResetAt - now) / 1000))));
+            return res.status(429).json({ error: 'rate_limited', message });
+          }
+          current = hits.get(key);
+        }
         if (!current || now >= current.resetAt) {
           hits.set(key, { count: 1, resetAt: now + windowMs });
           continue;

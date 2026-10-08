@@ -2,8 +2,24 @@ import type { NextFunction, Request, Response } from 'express';
 import { AppError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
 
-function isDatabaseUnavailable(error: unknown): boolean {
-  return error instanceof Error && /ECONNREFUSED|connect ECONNREFUSED|password authentication failed|database.*(not|is).*available|timeout of|connection.*refused|connection terminated|could not connect to server|server.*(down|unavailable)|FATAL/i.test(error.message);
+export function isDatabaseUnavailable(error: unknown): boolean {
+  if (error && typeof error === 'object' && 'code' in error) {
+    const code = error.code;
+    if (typeof code === 'string' && (code.startsWith('08') || ['53300', '57P01', '57P02', '57P03'].includes(code))) {
+      return true;
+    }
+  }
+  return error instanceof Error && /ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EPIPE|connect ECONNREFUSED|password authentication failed|database.*(not|is).*available|timeout of|connection.*refused|connection terminated|could not connect to server|server.*(down|unavailable)|FATAL/i.test(error.message);
+}
+
+function safeErrorMetadata(error: unknown) {
+  if (!error || typeof error !== 'object') return { errorName: 'UnknownError' };
+  const fields: { errorName: string; code?: string; constraint?: string } = {
+    errorName: error instanceof Error ? error.name : 'UnknownError',
+  };
+  if ('code' in error && typeof error.code === 'string') fields.code = error.code.slice(0, 32);
+  if ('constraint' in error && typeof error.constraint === 'string') fields.constraint = error.constraint.slice(0, 128);
+  return fields;
 }
 
 function isDatabaseSchemaUnavailable(error: unknown): boolean {
@@ -31,8 +47,17 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     return res.status(err.status).json(err.toResponse());
   }
 
+  if (err && typeof err === 'object' && 'type' in err) {
+    if (err.type === 'entity.too.large') {
+      return res.status(413).json({ error: 'payload_too_large', message: 'Request body exceeds the allowed size.' });
+    }
+    if (err.type === 'entity.parse.failed') {
+      return res.status(400).json({ error: 'invalid_json', message: 'Request body must contain valid JSON.' });
+    }
+  }
+
   if (isDatabaseUnavailable(err)) {
-    logger.error('database_unavailable', { ...requestContext, message: err instanceof Error ? err.message : 'Database unavailable' });
+    logger.error('database_unavailable', { ...requestContext, ...safeErrorMetadata(err) });
     return res.status(503).json({
       error: 'service_unavailable',
       message: 'The service is temporarily unavailable. Please try again later.',

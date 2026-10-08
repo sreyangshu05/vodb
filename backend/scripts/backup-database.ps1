@@ -1,6 +1,7 @@
 param(
   [ValidateRange(1, 365)]
-  [int]$RetentionDays = 7
+  [int]$RetentionDays = 7,
+  [string]$AdditionalCopyPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -90,10 +91,30 @@ Set-PostgresConnectionEnvironment $connectionString
 
 $backupDirectory = Join-Path $env:LOCALAPPDATA 'Vodb\DatabaseBackups'
 New-Item -ItemType Directory -Path $backupDirectory -Force | Out-Null
+$additionalBackupDirectory = $null
+if ($AdditionalCopyPath) {
+  $additionalBackupDirectory = [System.IO.Path]::GetFullPath($AdditionalCopyPath)
+  $localDirectory = [System.IO.Path]::GetFullPath($backupDirectory)
+  $normalizedLocalDirectory = $localDirectory.TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+  $normalizedAdditionalDirectory = $additionalBackupDirectory.TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+  if ($normalizedAdditionalDirectory -eq $normalizedLocalDirectory -or
+      $normalizedAdditionalDirectory.StartsWith($normalizedLocalDirectory, [System.StringComparison]::OrdinalIgnoreCase) -or
+      $normalizedLocalDirectory.StartsWith($normalizedAdditionalDirectory, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw 'AdditionalCopyPath must be a separate directory, not an ancestor or child of the primary local backup directory.'
+  }
+  $localRoot = [System.IO.Path]::GetPathRoot($localDirectory)
+  $additionalRoot = [System.IO.Path]::GetPathRoot($additionalBackupDirectory)
+  if ($localRoot -and $additionalRoot -and $localRoot.Equals($additionalRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw 'AdditionalCopyPath must be on another volume or a network share.'
+  }
+  New-Item -ItemType Directory -Path $additionalBackupDirectory -Force | Out-Null
+}
 
 $timestamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
 $backupPath = Join-Path $backupDirectory "vodb-$timestamp.dump"
 $temporaryPath = "$backupPath.partial"
+$additionalBackupPath = if ($additionalBackupDirectory) { Join-Path $additionalBackupDirectory "vodb-$timestamp.dump" } else { $null }
+$additionalTemporaryPath = if ($additionalBackupPath) { "$additionalBackupPath.partial" } else { $null }
 
 try {
   & $pgDump.Source --format=custom --no-owner --no-acl --file="$temporaryPath"
@@ -117,6 +138,24 @@ try {
   $checksum = Get-FileHash -LiteralPath $backupPath -Algorithm SHA256
   Set-Content -LiteralPath "$backupPath.sha256" -Value "$($checksum.Hash.ToLowerInvariant())  $(Split-Path -Leaf $backupPath)" -Encoding ascii
 
+  if ($additionalBackupDirectory) {
+    Copy-Item -LiteralPath $backupPath -Destination $additionalTemporaryPath
+    $additionalChecksum = Get-FileHash -LiteralPath $additionalTemporaryPath -Algorithm SHA256
+    if ($additionalChecksum.Hash -ne $checksum.Hash) {
+      throw 'The additional backup copy checksum does not match the primary backup.'
+    }
+    Move-Item -LiteralPath $additionalTemporaryPath -Destination $additionalBackupPath
+    Set-Content -LiteralPath "$additionalBackupPath.sha256" -Value "$($checksum.Hash.ToLowerInvariant())  $(Split-Path -Leaf $additionalBackupPath)" -Encoding ascii
+
+    $additionalCutoff = (Get-Date).AddDays(-$RetentionDays)
+    Get-ChildItem -LiteralPath $additionalBackupDirectory -Filter 'vodb-*.dump' -File |
+      Where-Object { $_.LastWriteTime -lt $additionalCutoff } |
+      ForEach-Object {
+        Remove-Item -LiteralPath $_.FullName
+        Remove-Item -LiteralPath "$($_.FullName).sha256" -ErrorAction SilentlyContinue
+      }
+  }
+
   $cutoff = (Get-Date).AddDays(-$RetentionDays)
   Get-ChildItem -LiteralPath $backupDirectory -Filter 'vodb-*.dump' -File |
     Where-Object { $_.LastWriteTime -lt $cutoff } |
@@ -129,9 +168,15 @@ try {
     Remove-Item -ErrorAction SilentlyContinue
 
   Write-Output "Backup completed: $backupPath"
+  if ($additionalBackupPath) {
+    Write-Output "Verified additional copy: $additionalBackupPath"
+  }
   Write-Output "SHA-256: $($checksum.Hash.ToLowerInvariant())"
 } finally {
   Remove-Item -LiteralPath $temporaryPath -ErrorAction SilentlyContinue
+  if ($additionalTemporaryPath) {
+    Remove-Item -LiteralPath $additionalTemporaryPath -ErrorAction SilentlyContinue
+  }
   foreach ($name in $postgresEnvironmentNames) {
     if ($null -eq $previousPostgresEnvironment[$name]) {
       Remove-Item "Env:$name" -ErrorAction SilentlyContinue

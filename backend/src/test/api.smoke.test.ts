@@ -38,6 +38,32 @@ test('unknown routes return a stable not-found response', async () => {
   assert.equal(res.body.error, 'not_found');
 });
 
+test('malformed and oversized JSON request bodies return client errors', async () => {
+  const malformed = await request(app)
+    .post('/api/v1/auth/google')
+    .set('Content-Type', 'application/json')
+    .send('{');
+  assert.equal(malformed.status, 400);
+  assert.equal(malformed.body.error, 'invalid_json');
+
+  const oversized = await request(app)
+    .post('/api/v1/auth/google')
+    .set('Content-Type', 'application/json')
+    .send(`{"payload":"${'x'.repeat(1024 * 1024)}"}`);
+  assert.equal(oversized.status, 413);
+  assert.equal(oversized.body.error, 'payload_too_large');
+});
+
+test('media upload checks authentication before parsing large JSON bodies', async () => {
+  const response = await request(app)
+    .post('/api/v1/media/upload')
+    .set('Content-Type', 'application/json')
+    .send(`{"payload":"${'x'.repeat(2 * 1024 * 1024)}"}`);
+
+  assert.equal(response.status, 401);
+  assert.equal(response.body.error, 'unauthorized');
+});
+
 test('authenticated non-admin users cannot access admin routes', async () => {
   const token = await signToken({
     id: 'verification-member',

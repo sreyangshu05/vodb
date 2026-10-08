@@ -33,7 +33,8 @@ function isAppErrorLike(value: unknown): value is AppError {
 const publicLimiter = createRateLimiter({
   windowMs: env.RATE_LIMIT_WINDOW_MS,
   max: env.RATE_LIMIT_MAX_REQUESTS,
-  shared: true,
+  // Keep ordinary public reads off PostgreSQL; abuse-sensitive endpoints below remain shared.
+  shared: false,
   keyPrefix: 'public-api',
 });
 
@@ -269,6 +270,11 @@ router.post('/contact', contactLimiter, async (req, res, next) => {
         issues: error.issues.map((issue) => ({ path: issue.path, message: issue.message })),
       }));
     }
+    logger.error('contact_service_failed', {
+      errorName: error instanceof Error ? error.name : 'UnknownError',
+      code: error && typeof error === 'object' && 'code' in error ? error.code : undefined,
+      constraint: error && typeof error === 'object' && 'constraint' in error ? error.constraint : undefined,
+    });
     return next(new AppError(503, 'contact_service_unavailable', 'The contact service is temporarily unavailable.'));
   }
 });
