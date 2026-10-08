@@ -167,16 +167,14 @@ export async function unsubscribeNewsletter(token: string) {
 
 export async function processNewsletterDeliveryEvent(event: 'delivered' | 'bounce' | 'complaint', email: string) {
   const status = event === 'bounce' ? 'bounced' : event === 'complaint' ? 'complained' : null;
-  const result = await db.query<{ id: string }>(
+  await db.query(
     status
       ? `UPDATE newsletter_subscriptions
          SET status = $1, updated_at = NOW(), last_delivery_at = NOW()
-         WHERE lower(email) = lower($2) AND status NOT IN ('unsubscribed', 'complained')
-         RETURNING id`
+         WHERE lower(email) = lower($2) AND status NOT IN ('unsubscribed', 'complained')`
       : `UPDATE newsletter_subscriptions
          SET last_delivery_at = NOW(), updated_at = NOW()
-         WHERE lower(email) = lower($1)
-         RETURNING id`,
+         WHERE lower(email) = lower($1)`,
     status ? [status, email] : [email],
   );
 }
