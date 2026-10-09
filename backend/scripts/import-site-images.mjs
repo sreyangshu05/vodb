@@ -11,6 +11,7 @@ const backendRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 dotenv.config({ path: path.resolve(backendRoot, '.env') });
 const repoRoot = path.resolve(backendRoot, '..');
 const manifestPath = path.resolve(backendRoot, 'config/homepage-image-paths.txt');
+const imageRoot = path.resolve(repoRoot, 'frontend/images');
 const allowed = new Map([['.png', 'image/png'], ['.jpg', 'image/jpeg'], ['.jpeg', 'image/jpeg'], ['.webp', 'image/webp']]);
 const maxBytes = 25 * 1024 * 1024;
 
@@ -29,7 +30,10 @@ try {
   let skipped = 0;
   let totalBytes = 0;
   for (const { sourcePath, file } of assets) {
-    if (!file.startsWith(path.resolve(repoRoot, 'frontend/images') + path.sep)) throw new Error(`Manifest path escapes frontend/images: ${sourcePath}`);
+    const relativePath = path.relative(imageRoot, file);
+    if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+      throw new Error(`Manifest path escapes frontend/images: ${sourcePath}`);
+    }
     const info = await stat(file);
     const mime = allowed.get(path.extname(file).toLowerCase());
     if (info.size > maxBytes) throw new Error(`${sourcePath} exceeds the 25 MB database asset limit.`);

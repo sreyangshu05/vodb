@@ -7,7 +7,7 @@ import { db } from '../lib/db.js';
 import { waitForAuditWrites } from '../services/auditService.js';
 import { env } from '../config/env.js';
 import { createPasswordReset, signToken } from '../services/authService.js';
-import { createMediaAccess } from '../services/mediaService.js';
+import { createMediaAccess, resolveMediaToken } from '../services/mediaService.js';
 import { createNewsletterSubscription } from '../services/submissionService.js';
 
 const integrationEnabled = process.env.BACKEND_TEST_DATABASE_MODE === 'available';
@@ -226,6 +226,18 @@ test('protected media requires explicit sharing when it has no owner', {
     const access = await createMediaAccess(mediaId, userId, {});
     assert.equal(access.media.id, mediaId);
     assert.equal(typeof access.token, 'string');
+
+    const stream = () => request(app)
+      .get('/api/v1/media/stream')
+      .set('x-media-access-token', access.token);
+    const allowed = await resolveMediaToken(access.token);
+    assert.equal(allowed.media.id, mediaId);
+
+    await db.query('UPDATE protected_media SET is_shared = FALSE WHERE id = $1', [mediaId]);
+    await assert.rejects(
+      resolveMediaToken(access.token),
+      (error: unknown) => error instanceof Error && 'error' in error && error.error === 'media_not_found',
+    );
   } finally {
     if (mediaId) await db.query('DELETE FROM protected_media WHERE id = $1', [mediaId]);
     if (userId) await db.query('DELETE FROM users WHERE id = $1', [userId]);

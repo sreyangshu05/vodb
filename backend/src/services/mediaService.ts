@@ -1,14 +1,33 @@
 import crypto from 'node:crypto';
+import { isIP } from 'node:net';
 import { db } from '../lib/db.js';
 import { env } from '../config/env.js';
 import { AppError } from '../utils/errors.js';
 
 type MediaRow = { id: string; storage_url: string; mime_type: string; title: string };
 
-function validateStorageUrl(storageUrl: string): string {
+export function validateStorageUrl(storageUrl: string): string {
   try {
     const parsed = new URL(storageUrl);
-    if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('Unsupported storage URL scheme.');
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
+      throw new Error('Unsupported storage URL.');
+    }
+    const hostname = parsed.hostname.toLowerCase();
+    const ipHostname = hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
+    if (!hostname || hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local')) {
+      throw new Error('Storage URL must use a public host.');
+    }
+    if (isIP(ipHostname) === 4) {
+      const [a, b] = ipHostname.split('.').map(Number);
+      if (a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b! >= 16 && b! <= 31) || (a === 192 && b === 168) || a! >= 224) {
+        throw new Error('Storage URL must use a public host.');
+      }
+    } else if (isIP(ipHostname) === 6) {
+      const normalized = ipHostname;
+      if (normalized === '::' || normalized === '::1' || normalized.startsWith('fc') || normalized.startsWith('fd') || /^fe[89ab]/.test(normalized)) {
+        throw new Error('Storage URL must use a public host.');
+      }
+    }
     return parsed.toString();
   } catch {
     throw new AppError(503, 'media_storage_unavailable', 'Protected media storage is temporarily unavailable.');
@@ -54,8 +73,10 @@ export async function createMediaAccess(mediaId: string, userId: string, request
 export async function resolveMediaToken(token: string) {
   const { mediaId, userId } = verify(token);
   const result = await db.query<MediaRow>(
-    'SELECT id, storage_url, mime_type, title FROM protected_media WHERE id = $1 AND is_active = TRUE',
-    [mediaId],
+    `SELECT id, storage_url, mime_type, title
+     FROM protected_media
+     WHERE id = $1 AND is_active = TRUE AND (owner_user_id = $2 OR is_shared = TRUE)`,
+    [mediaId, userId],
   );
   const media = result.rows[0];
   if (!media) throw new AppError(404, 'media_not_found', 'Protected media was not found.');

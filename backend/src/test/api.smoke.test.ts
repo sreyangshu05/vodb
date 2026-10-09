@@ -104,6 +104,26 @@ test('media upload checks authentication before parsing large JSON bodies', asyn
   assert.equal(response.body.error, 'unauthorized');
 });
 
+test('media upload rejects file signatures that do not match the declared image format', async () => {
+  const token = await signToken({
+    id: 'verification-admin',
+    email: 'verification-admin@example.com',
+    name: 'Verification Admin',
+    role: 'admin',
+  });
+  const response = await request(app)
+    .post('/api/v1/media/upload')
+    .set('Authorization', `Bearer ${token}`)
+    .send({
+      data: `data:image/png;base64,${Buffer.from('not a png').toString('base64')}`,
+      mimeType: 'image/png',
+      fileName: '../../unsafe.png',
+    });
+
+  assert.equal(response.status, 422);
+  assert.equal(response.body.error, 'invalid_image');
+});
+
 test('authenticated non-admin users cannot access admin routes', async () => {
   const token = await signToken({
     id: 'verification-member',
