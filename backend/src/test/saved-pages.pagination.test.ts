@@ -40,6 +40,7 @@ test('saved pages use bounded keyset pagination with a stable composite cursor',
       .set('Authorization', `Bearer ${token}`);
 
     assert.equal(firstPage.status, 200);
+    assert.equal(firstPage.headers['cache-control'], 'no-store');
     assert.deepEqual(firstPage.body.items.map((item: { path: string }) => item.path), ['/first']);
     assert.equal(firstPage.body.hasMore, true);
     assert.ok(typeof firstPage.body.nextCursor === 'string');
@@ -51,6 +52,7 @@ test('saved pages use bounded keyset pagination with a stable composite cursor',
       .get(`/api/v1/auth/me/saved-pages?limit=1&cursor=${encodeURIComponent(firstPage.body.nextCursor)}`)
       .set('Authorization', `Bearer ${token}`);
     assert.equal(secondPage.status, 200);
+    assert.equal(secondPage.headers['cache-control'], 'no-store');
     assert.deepEqual(secondPage.body.items.map((item: { path: string }) => item.path), ['/third']);
     assert.equal(secondPage.body.hasMore, false);
     assert.equal(secondPage.body.nextCursor, null);

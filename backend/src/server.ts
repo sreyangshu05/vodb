@@ -22,6 +22,12 @@ const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.arg
 app.set('trust proxy', 1);
 app.use(requestIdMiddleware);
 app.use(apiErrorLogMiddleware);
+app.use('/api/v1', (_req, res, next) => {
+  // API responses may contain account or administrative data. Public media
+  // handlers opt into a short cache policy after confirming publication.
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+});
 
 // Keep local Vite fallback/preview and admin preview origins available even
 // when an older .env file is still being used by a running development process.

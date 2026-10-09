@@ -258,6 +258,7 @@ test('public image cache hits return a 304 without the image response body', {
     );
     const firstResponse = await request(app).get('/api/v1/media/source').query({ path: sourcePath });
     assert.equal(firstResponse.status, 200);
+    assert.match(firstResponse.headers['cache-control'] ?? '', /public, max-age=300, stale-while-revalidate=60/);
     assert.ok(firstResponse.headers.etag);
 
     const cachedResponse = await request(app)
@@ -266,6 +267,7 @@ test('public image cache hits return a 304 without the image response body', {
       .set('If-None-Match', firstResponse.headers.etag);
     assert.equal(cachedResponse.status, 304);
     assert.equal(cachedResponse.text, '');
+    assert.match(cachedResponse.headers['cache-control'] ?? '', /public, max-age=300, stale-while-revalidate=60/);
   } finally {
     await db.query('DELETE FROM media_assets WHERE source_path = $1', [sourcePath]);
   }

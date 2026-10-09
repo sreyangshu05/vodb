@@ -55,7 +55,7 @@ router.get('/snapshot', requireObservabilityToken, async (_req, res) => {
 
 router.get('/stream', requireObservabilityToken, (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Cache-Control', 'private, no-store, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
   const unsubscribe = metrics.subscribe(res, async () => metrics.snapshot(await databaseSnapshot()));

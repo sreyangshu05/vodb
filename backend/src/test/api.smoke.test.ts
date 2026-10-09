@@ -18,9 +18,16 @@ after(async () => {
 test('GET /api/v1/health reports process liveness when the database is unavailable', async () => {
   const res = await request(app).get('/api/v1/health');
   assert.equal(res.status, 200);
+  assert.equal(res.headers['cache-control'], 'no-store');
   assert.equal(res.body.ok, true);
   assert.equal(res.body.status, 'alive');
   assert.ok(typeof res.headers['x-request-id'] === 'string');
+});
+
+test('observability snapshots are not cacheable', async () => {
+  const response = await request(app).get('/api/v1/observability/snapshot');
+  assert.equal(response.status, 200);
+  assert.equal(response.headers['cache-control'], 'no-store');
 });
 
 test('GET /api/v1/readiness reports database unavailability', async () => {
@@ -95,11 +102,12 @@ test('malformed and oversized JSON request bodies return client errors', async (
   assert.equal(oversized.body.error, 'payload_too_large');
 });
 
-test('media upload checks authentication before parsing large JSON bodies', async () => {
+test('media upload checks authentication before parsing its request body', async (context) => {
+  context.mock.method(db, 'logApiError', async () => undefined);
   const response = await request(app)
     .post('/api/v1/media/upload')
     .set('Content-Type', 'application/json')
-    .send(`{"payload":"${'x'.repeat(2 * 1024 * 1024)}"}`);
+    .send('{');
 
   assert.equal(response.status, 401);
   assert.equal(response.body.error, 'unauthorized');

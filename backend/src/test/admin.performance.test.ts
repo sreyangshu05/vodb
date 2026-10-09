@@ -45,6 +45,7 @@ test('admin overview loads all dashboard counts with one database query', async 
       .set('Authorization', `Bearer ${token}`);
 
     assert.equal(response.status, 200);
+    assert.equal(response.headers['cache-control'], 'no-store');
     assert.deepEqual(response.body.content, { blogs: 12, events: 8, pendingReview: 5 });
     assert.deepEqual(response.body.submissions, { openInquiries: 4, activeSubscribers: 15 });
     assert.equal(response.body.users, 20);
