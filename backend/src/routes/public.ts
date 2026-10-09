@@ -70,10 +70,6 @@ const contactLimiter = createRateLimiter({
 
 router.use(publicLimiter);
 
-router.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'voice-of-digi-bengal-backend', timestamp: new Date().toISOString() });
-});
-
 router.get('/blogs', async (req, res, next) => {
   try {
     const { limit, offset } = paginationSchema.parse(req.query);

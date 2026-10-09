@@ -99,13 +99,19 @@ app.get('/', (_req, res) => {
   res.json({ service: 'voice-of-digi-bengal-backend', status: 'ok' });
 });
 
-app.get(['/health', '/api/v1/health'], async (_req, res, next) => {
+app.get('/health', async (_req, res, next) => {
   try {
     const health = await getHealthStatus();
     res.status(health.ok ? 200 : 503).json(health);
   } catch (error) {
     next(error);
   }
+});
+
+// Liveness must only report whether this process can serve requests. Use
+// /api/v1/readiness for the database dependency check below.
+app.get('/api/v1/health', (_req, res) => {
+  res.json({ ok: true, service: 'voice-of-digi-bengal-backend', status: 'alive' });
 });
 
 app.get('/api/v1/readiness', async (_req, res) => {

@@ -14,11 +14,22 @@ after(async () => {
   await db.end();
 });
 
-test('GET /api/v1/health responds successfully', async () => {
+test('GET /api/v1/health reports process liveness when the database is unavailable', async () => {
   const res = await request(app).get('/api/v1/health');
   assert.equal(res.status, 200);
   assert.equal(res.body.ok, true);
+  assert.equal(res.body.status, 'alive');
   assert.ok(typeof res.headers['x-request-id'] === 'string');
+});
+
+test('GET /api/v1/readiness reports database unavailability', async () => {
+  const res = await request(app).get('/api/v1/readiness');
+  assert.equal(res.status, 503);
+  assert.deepEqual(res.body, {
+    ok: false,
+    service: 'voice-of-digi-bengal-backend',
+    database: 'unavailable',
+  });
 });
 
 test('GET /api/v1/health replaces invalid client request IDs', async () => {
