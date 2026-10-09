@@ -15,6 +15,16 @@ const transporter = env.SMTP_HOST
     })
   : null;
 
+export async function checkMailService(): Promise<'ready' | 'not_configured' | 'unavailable'> {
+  if (!transporter || !env.SMTP_FROM) return 'not_configured';
+  try {
+    await transporter.verify();
+    return 'ready';
+  } catch {
+    return 'unavailable';
+  }
+}
+
 export async function sendPasswordResetOtp(email: string, code: string): Promise<void> {
   if (!transporter || !env.SMTP_FROM) {
     throw new AppError(503, 'email_delivery_unavailable', 'Password reset email delivery is temporarily unavailable.');

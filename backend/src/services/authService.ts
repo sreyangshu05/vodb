@@ -13,6 +13,30 @@ import { hashOneTimeCode } from '../utils/otp.js';
 const scrypt = promisify(scryptCallback);
 const PASSWORD_KEY_LENGTH = 64;
 const googleClient = new OAuth2Client();
+const GOOGLE_VERIFICATION_RETRY_DELAYS_MS = [250, 600];
+
+function isTransientGoogleVerificationError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|fetch failed|network|socket|429|5\d\d/i.test(message);
+}
+
+async function verifyGoogleIdToken(idToken: string, audience: string) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await googleClient.verifyIdToken({ idToken, audience });
+    } catch (error) {
+      const retryDelay = GOOGLE_VERIFICATION_RETRY_DELAYS_MS[attempt];
+      if (retryDelay === undefined || !isTransientGoogleVerificationError(error)) throw error;
+
+      logger.warn('google_verification_retry', {
+        attempt: attempt + 1,
+        delayMs: retryDelay,
+        message: error instanceof Error ? error.message : 'Google verification request failed.',
+      });
+      await new Promise(resolve => setTimeout(resolve, retryDelay));
+    }
+  }
+}
 
 export async function verifySignupChallenge(token: string | undefined, remoteIp?: string): Promise<void> {
   if (!env.TURNSTILE_SECRET_KEY && env.NODE_ENV !== 'production') return;
@@ -295,11 +319,11 @@ export async function authenticateGoogleUser(idToken: string): Promise<AuthUser>
 
   let payload;
   try {
-    const ticket = await googleClient.verifyIdToken({ idToken, audience: env.GOOGLE_CLIENT_ID });
+    const ticket = await verifyGoogleIdToken(idToken, env.GOOGLE_CLIENT_ID);
     payload = ticket.getPayload();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (/ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|fetch failed|network|socket|429|5\d\d/i.test(message)) {
+    if (isTransientGoogleVerificationError(error)) {
       logger.error('google_provider_unavailable', { message });
       throw new AppError(503, 'google_auth_unavailable', 'Google sign-in is temporarily unavailable.');
     }
@@ -328,6 +352,7 @@ export async function authenticateGoogleUser(idToken: string): Promise<AuthUser>
   const existing = await db.query<{ id: string; name: string; email: string; role: AuthUser['role'] }>(
     `SELECT id, name, email, role FROM users
      WHERE google_subject = $1 OR lower(email) = lower($2)
+     ORDER BY CASE WHEN google_subject = $1 THEN 0 ELSE 1 END
      LIMIT 1`,
     [payload.sub, normalizedEmail],
   );
@@ -353,6 +378,35 @@ export async function authenticateGoogleUser(idToken: string): Promise<AuthUser>
     return result.rows[0];
   } catch (error) {
     if (error && typeof error === 'object' && 'code' in error && error.code === '23505') {
+      // Another sign-in request may have created this same Google account
+      // after our initial lookup. Resolve that race as a successful sign-in.
+      const concurrentUser = await db.query<{
+        id: string;
+        name: string;
+        email: string;
+        role: AuthUser['role'];
+        google_subject: string | null;
+      }>(
+        `SELECT id, name, email, role, google_subject FROM users
+         WHERE google_subject = $1 OR lower(email) = lower($2)
+         ORDER BY CASE WHEN google_subject = $1 THEN 0 ELSE 1 END
+         LIMIT 1`,
+        [payload.sub, normalizedEmail],
+      );
+      const racedAccount = concurrentUser.rows[0];
+      if (racedAccount && (!racedAccount.google_subject || racedAccount.google_subject === payload.sub)) {
+        await db.query(
+          `UPDATE users SET google_subject = $1, auth_provider = 'google', email_verified = true, updated_at = now()
+           WHERE id = $2`,
+          [payload.sub, racedAccount.id],
+        );
+        return {
+          id: racedAccount.id,
+          name: racedAccount.name,
+          email: racedAccount.email,
+          role: racedAccount.role,
+        };
+      }
       throw new AppError(409, 'account_already_exists', 'This Google account is already being linked. Please try again.');
     }
     throw error;

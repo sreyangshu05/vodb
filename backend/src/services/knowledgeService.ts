@@ -14,6 +14,20 @@ function isAiProviderConfigured(): boolean {
   return Boolean(env.NEON_AI_GATEWAY_BASE_URL && env.NEON_AI_GATEWAY_TOKEN && env.NEON_AI_GATEWAY_MODEL);
 }
 
+export async function checkAiProvider(): Promise<'ready' | 'not_configured' | 'unavailable'> {
+  if (!isAiProviderConfigured()) return 'not_configured';
+  try {
+    const endpoint = `${env.NEON_AI_GATEWAY_BASE_URL!.replace(/\/+$/, '')}/v1/models`;
+    const response = await fetch(endpoint, {
+      headers: { Authorization: `Bearer ${env.NEON_AI_GATEWAY_TOKEN}` },
+      signal: AbortSignal.timeout(4000),
+    });
+    return response.ok ? 'ready' : 'unavailable';
+  } catch {
+    return 'unavailable';
+  }
+}
+
 async function complete(prompt: string, system: string): Promise<string> {
   if (!isAiProviderConfigured()) throw new AiProviderError('AI metadata suggestions are not configured.');
   const endpoint = `${env.NEON_AI_GATEWAY_BASE_URL!.replace(/\/+$/, '')}/v1/chat/completions`;

@@ -15,11 +15,14 @@ import { logger } from './utils/logger.js';
 import { waitForAuditWrites } from './services/auditService.js';
 import observabilityRouter from './routes/observability.js';
 import { metrics } from './services/metricsService.js';
+import { apiErrorLogMiddleware } from './middleware/apiErrorLog.js';
+import { getHealthStatus } from './services/healthService.js';
 
 const app = express();
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 app.set('trust proxy', 1);
 app.use(requestIdMiddleware);
+app.use(apiErrorLogMiddleware);
 
 // Keep local Vite fallback/preview and admin preview origins available even
 // when an older .env file is still being used by a running development process.
@@ -85,8 +88,13 @@ app.get('/', (_req, res) => {
   res.json({ service: 'voice-of-digi-bengal-backend', status: 'ok' });
 });
 
-app.get('/api/v1/health', (_req, res) => {
-  res.json({ ok: true, service: 'voice-of-digi-bengal-backend' });
+app.get(['/health', '/api/v1/health'], async (_req, res, next) => {
+  try {
+    const health = await getHealthStatus();
+    res.status(health.ok ? 200 : 503).json(health);
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get('/api/v1/readiness', async (_req, res) => {
