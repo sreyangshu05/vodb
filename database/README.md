@@ -80,6 +80,9 @@ Migrations are intentionally ordered and plain SQL:
 - `migrations/015_limit_email_otp_attempts.sql`
 - `migrations/016_reliability_controls.sql`
 - `migrations/017_add_all_day_events.sql`
+- `migrations/018_make_protected_media_sharing_explicit.sql`
+- `migrations/019_create_api_error_logs.sql`
+- `migrations/020_trim_redundant_slug_indexes_and_audit_hold.sql`
 
 Homepage image bytes are held in PostgreSQL `BYTEA`. Import requires adequate database storage and backup capacity (about 138 MiB for the current homepage image manifest).
 
@@ -90,6 +93,8 @@ npm.cmd --prefix backend run db:migrate
 ```
 
 The runner applies every pending numbered migration and records checksums in `app_schema_migrations`. Use a direct connection URL for migrations; the pooled `DATABASE_URL` is for the running API. Test pending migrations on a Neon branch before applying them to production.
+
+Migration 020 removes only the redundant named slug indexes; the original `UNIQUE` constraints continue enforcing slug uniqueness. It also adds `audit_events.legal_hold`, defaulting existing and new rows to `FALSE`. The migration is transactional and does not rewrite or delete application data. Dropping indexes takes a PostgreSQL table lock briefly; check for long-running transactions before applying it to a busy production database. Do not edit an applied migration; use a new numbered migration for later changes.
 
 Migration 016 adds shared PostgreSQL-backed rate-limit buckets, contact-inquiry idempotency, and a user token version used to revoke existing JWTs after password resets. Requests to protected APIs use the shared rate-limit table, so apply all migrations before deploying the corresponding backend version. The contact form sends a UUID `Idempotency-Key`; retries with the same key and body return the original inquiry rather than inserting a duplicate.
 
@@ -117,6 +122,24 @@ The implementation follows the design documents in `frontend/docs/database` and 
 - Keep all writes behind the API boundary; the browser never connects directly to PostgreSQL.
 - Use least-privilege database roles in production.
 - Backups and PITR are provider-managed requirements before production.
+
+## Retention maintenance
+
+The repository policy is to retain audit events for seven years, protected-media access records for 90 days, and API error logs for 30 days. An audit record with `legal_hold = TRUE` is excluded from automated cleanup. Confirm these periods meet applicable legal and organizational requirements before production use.
+
+Retention cleanup is an explicit, free, operator-run PostgreSQL maintenance task; the repository does not require a paid scheduler or provider. It defaults to a read-only dry run and processes deletions in batches of 1,000 (maximum 10,000 per batch):
+
+```powershell
+npm.cmd --prefix backend run db:retention
+npm.cmd --prefix backend run db:retention -- --apply
+npm.cmd --prefix backend run db:retention -- --apply --batch-size=500
+```
+
+Use a direct database connection. Review dry-run counts and take/verify a backup before applying. The task uses `FOR UPDATE SKIP LOCKED`, so concurrent maintenance workers do not claim the same rows. It is safe to rerun. Record the run time and deleted counts; test the procedure and restore path in a nonproduction database first.
+
+## Query-plan review
+
+Do not add indexes solely from schema inspection. Run representative plans against staging data with realistic row counts and distributions. `EXPLAIN (ANALYZE, BUFFERS)` executes the query, so use a read-only role and avoid running expensive plans on production without an approved window. Review feed, full-text search, admin list, dashboard aggregate, and audit pagination queries; record row estimates versus actual rows, buffer reads, sort spills, and execution time. See [`QUERY-PLAN-REVIEW.md`](./QUERY-PLAN-REVIEW.md) for query shapes and the review checklist.
 
 ## Validation
 

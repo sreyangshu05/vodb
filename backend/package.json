@@ -15,6 +15,7 @@
     "test:load": "node scripts/load-test.mjs",
     "hash-admin-password": "node scripts/hash-admin-password.mjs",
     "db:migrate": "node scripts/migrate.mjs",
+    "db:retention": "node scripts/retention-maintenance.mjs",
     "import:homepage-images": "node scripts/import-site-images.mjs"
   },
   "dependencies": {

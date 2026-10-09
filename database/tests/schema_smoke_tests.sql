@@ -23,10 +23,13 @@ END $$;
 
 DO $$
 BEGIN
-  ASSERT (EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'uq_blog_posts_slug')), 'Missing blog slug unique index';
-  ASSERT (EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'uq_events_slug')), 'Missing event slug unique index';
+  ASSERT (EXISTS (SELECT 1 FROM pg_indexes WHERE tablename = 'blog_posts' AND indexdef LIKE 'CREATE UNIQUE INDEX% (slug)')), 'Blog slug uniqueness is not enforced';
+  ASSERT (EXISTS (SELECT 1 FROM pg_indexes WHERE tablename = 'events' AND indexdef LIKE 'CREATE UNIQUE INDEX% (slug)')), 'Event slug uniqueness is not enforced';
+  ASSERT (NOT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname IN ('uq_blog_posts_slug', 'uq_events_slug')), 'Redundant slug index remains';
   ASSERT (EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'uq_newsletter_email')), 'Missing newsletter email unique index';
+  ASSERT (EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'uq_users_email_lower')), 'Missing case-insensitive user email unique index';
   ASSERT (EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'uq_users_google_subject')), 'Missing Google subject unique index';
+  ASSERT (EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'protected_media_access_log_retention_idx')), 'Missing media access retention index';
 END $$;
 
 DO $$
@@ -34,6 +37,73 @@ BEGIN
   ASSERT (EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'auth_provider')), 'users.auth_provider column missing';
   ASSERT (EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'google_subject')), 'users.google_subject column missing';
   ASSERT (EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'password_reset_otps' AND column_name = 'code_hash')), 'password_reset_otps.code_hash column missing';
+  ASSERT (EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'audit_events' AND column_name = 'legal_hold' AND is_nullable = 'NO'), 'audit_events.legal_hold column missing or nullable';
+END $$;
+
+DO $$
+BEGIN
+  INSERT INTO blog_posts (title, slug, content, published) VALUES ('Unique test', 'unique-test-slug', 'Body', FALSE);
+  INSERT INTO events (title, slug, description, event_date, location, published)
+  VALUES ('Unique test', 'unique-test-event', 'Body', now(), 'Kolkata', FALSE);
+  INSERT INTO newsletter_subscriptions (email, status, consented_at, confirmed_at)
+  VALUES ('unique-test@example.com', 'active', now(), now());
+  INSERT INTO users (name, email, password_hash) VALUES ('Unique Test', 'unique-user@example.com', 'test');
+
+  BEGIN
+    INSERT INTO blog_posts (title, slug, content, published) VALUES ('Duplicate slug test', 'unique-test-slug', 'Body', FALSE);
+    RAISE EXCEPTION 'Duplicate blog slug was accepted';
+  EXCEPTION WHEN unique_violation THEN
+    NULL;
+  END;
+
+  BEGIN
+    INSERT INTO events (title, slug, description, event_date, location, published)
+    VALUES ('Duplicate event slug test', 'unique-test-event', 'Body', now(), 'Kolkata', FALSE);
+    RAISE EXCEPTION 'Duplicate event slug was accepted';
+  EXCEPTION WHEN unique_violation THEN
+    NULL;
+  END;
+
+  BEGIN
+    INSERT INTO newsletter_subscriptions (email, status, consented_at, confirmed_at)
+    VALUES ('UNIQUE-TEST@example.com', 'active', now(), now());
+    RAISE EXCEPTION 'Case-insensitive duplicate newsletter email was accepted';
+  EXCEPTION WHEN unique_violation THEN
+    NULL;
+  END;
+
+  BEGIN
+    INSERT INTO users (name, email, password_hash) VALUES ('Duplicate User', 'UNIQUE-USER@example.com', 'test');
+    RAISE EXCEPTION 'Case-insensitive duplicate user email was accepted';
+  EXCEPTION WHEN unique_violation THEN
+    NULL;
+  END;
+
+  DELETE FROM blog_posts WHERE slug = 'unique-test-slug';
+  DELETE FROM events WHERE slug = 'unique-test-event';
+  DELETE FROM newsletter_subscriptions WHERE lower(email) = 'unique-test@example.com';
+  DELETE FROM users WHERE lower(email) = 'unique-user@example.com';
+END $$;
+
+DO $$
+DECLARE
+  test_user_id UUID := gen_random_uuid();
+  test_media_id UUID;
+BEGIN
+  INSERT INTO users (id, name, email, password_hash)
+  VALUES (test_user_id, 'Foreign Key Test', 'foreign-key-test@example.com', 'test');
+  INSERT INTO user_saved_pages (user_id, page_path, title)
+  VALUES (test_user_id, '/foreign-key-test', 'Foreign key test');
+  INSERT INTO protected_media (owner_user_id, title, storage_url, mime_type)
+  VALUES (test_user_id, 'Foreign key test', 'https://example.com/test.png', 'image/png')
+  RETURNING id INTO test_media_id;
+
+  DELETE FROM users WHERE id = test_user_id;
+
+  ASSERT NOT EXISTS (SELECT 1 FROM user_saved_pages WHERE user_id = test_user_id), 'User-owned saved pages did not cascade on user deletion';
+  ASSERT (SELECT owner_user_id IS NULL AND is_shared = FALSE FROM protected_media WHERE id = test_media_id), 'Protected media ownership did not become unowned and private';
+
+  DELETE FROM protected_media WHERE id = test_media_id;
 END $$;
 
 INSERT INTO blog_posts (title, slug, content, published, published_at)
