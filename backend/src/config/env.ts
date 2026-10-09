@@ -43,6 +43,7 @@ const envSchema = z.object({
   POSTGRES_USER: z.string().default('postgres'),
   POSTGRES_PASSWORD: z.string().default('postgres'),
   POSTGRES_SSL: booleanFromEnv.default(false),
+  DATABASE_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(100).max(120000).default(15000),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().default(60000),
   RATE_LIMIT_MAX_REQUESTS: z.coerce.number().default(60),
   CONTACT_RATE_LIMIT_WINDOW_MS: z.coerce.number().default(60000),

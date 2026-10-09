@@ -39,6 +39,7 @@ const pool = new Pool({
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000,
+  statement_timeout: env.DATABASE_STATEMENT_TIMEOUT_MS,
 });
 
 type ApiErrorLog = { occurredAt: string; endpoint: string; errorMessage: string; userId?: string };

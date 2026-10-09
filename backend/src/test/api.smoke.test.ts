@@ -32,6 +32,35 @@ test('GET /api/v1/readiness reports database unavailability', async () => {
   });
 });
 
+test('public and admin list pagination rejects malformed values as client errors', async () => {
+  const publicResponses = await Promise.all([
+    request(app).get('/api/v1/blogs?limit=not-a-number'),
+    request(app).get('/api/v1/events?offset=-1'),
+  ]);
+  assert.equal(publicResponses[0]?.status, 422);
+  assert.equal(publicResponses[0]?.body.error, 'invalid_pagination');
+  assert.equal(publicResponses[1]?.status, 422);
+  assert.equal(publicResponses[1]?.body.error, 'invalid_pagination');
+
+  const adminToken = await signToken({
+    id: 'verification-admin',
+    email: 'verification-admin@example.com',
+    name: 'Verification Admin',
+    role: 'admin',
+  });
+  const adminResponses = await Promise.all([
+    request(app).get('/api/v1/admin/blogs?limit=not-a-number').set('Authorization', `Bearer ${adminToken}`),
+    request(app).get('/api/v1/admin/events?limit=0').set('Authorization', `Bearer ${adminToken}`),
+  ]);
+  for (const response of adminResponses) {
+    assert.equal(response.status, 422);
+    assert.equal(response.body.error, 'invalid_request');
+    assert.equal(response.body.message, 'Request validation failed.');
+    assert.ok(Array.isArray(response.body.details.issues));
+    assert.equal(JSON.stringify(response.body).includes('not-a-number'), false);
+  }
+});
+
 test('GET /api/v1/health replaces invalid client request IDs', async () => {
   const res = await request(app)
     .get('/api/v1/health')

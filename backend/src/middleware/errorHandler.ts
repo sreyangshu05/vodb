@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 import { AppError } from '../utils/errors.js';
+import { ZodError } from 'zod';
 import { isDatabaseConfigurationError, isDatabaseUnavailable } from '../utils/databaseErrors.js';
 import { logger } from '../utils/logger.js';
 
@@ -36,6 +37,29 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
   if (err instanceof AppError) {
     logger.warn('app_error', { ...requestContext, error: err.error, message: err.message, status: err.status });
     return res.status(err.status).json(err.toResponse());
+  }
+
+  // Route-level schema parsing must never become a 500 when a handler forwards
+  // a ZodError directly. Return only stable paths/messages, never submitted data.
+  if (err instanceof ZodError) {
+    return res.status(422).json({
+      error: 'invalid_request',
+      message: 'Request validation failed.',
+      details: {
+        issues: err.issues.map((issue) => ({
+          path: issue.path.map((segment) => String(segment)),
+          message: issue.message,
+        })),
+      },
+    });
+  }
+
+  if (err && typeof err === 'object' && 'code' in err && err.code === '57014') {
+    logger.warn('database_statement_timeout', { ...requestContext, ...safeErrorMetadata(err) });
+    return res.status(503).json({
+      error: 'database_query_timeout',
+      message: 'The request took too long to complete. Please try again later.',
+    });
   }
 
   if (err && typeof err === 'object' && 'type' in err) {

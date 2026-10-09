@@ -77,6 +77,7 @@ router.get('/blogs', async (req, res, next) => {
     const rows = await listPublishedBlogs(limit, offset);
     res.json(rows);
   } catch (error) {
+    if (error instanceof z.ZodError) return next(new AppError(422, 'invalid_pagination', 'Blog pagination is invalid.'));
     if (isAppErrorLike(error)) {
       return next(error);
     }
@@ -102,6 +103,7 @@ router.get('/events', async (req, res, next) => {
     const rows = await listPublishedEvents(limit, offset);
     res.json(rows);
   } catch (error) {
+    if (error instanceof z.ZodError) return next(new AppError(422, 'invalid_pagination', 'Event pagination is invalid.'));
     if (isAppErrorLike(error)) {
       return next(error);
     }
