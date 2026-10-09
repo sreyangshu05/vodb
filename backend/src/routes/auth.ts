@@ -46,6 +46,14 @@ const savedPageSchema = z.object({
 const savedPagePathSchema = z.object({
   path: z.string().trim().min(1).max(2048).refine(isLocalPagePath, 'A local page path is required.'),
 });
+const savedPagesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  cursor: z.string().max(16384).regex(/^[A-Za-z0-9_-]+$/).optional(),
+});
+const savedPagesCursorSchema = z.object({
+  createdAt: z.string().max(64).regex(/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}(?::?\d{2})?)$/),
+  path: z.string().min(1).max(2048),
+});
 const authLimiter = createRateLimiter({
   windowMs: env.ADMIN_LOGIN_RATE_LIMIT_WINDOW_MS,
   max: env.ADMIN_LOGIN_RATE_LIMIT_MAX_REQUESTS * 6,
@@ -261,12 +269,34 @@ router.patch('/me/preferences', requireAuth, async (req, res, next) => {
 
 router.get('/me/saved-pages', requireAuth, async (req, res, next) => {
   try {
+    const { limit, cursor: encodedCursor } = savedPagesQuerySchema.parse(req.query);
+    let cursor: z.infer<typeof savedPagesCursorSchema> | undefined;
+    if (encodedCursor) {
+      try {
+        const decoded = JSON.parse(Buffer.from(encodedCursor, 'base64url').toString('utf8')) as unknown;
+        cursor = savedPagesCursorSchema.parse(decoded);
+      } catch {
+        throw new AppError(422, 'invalid_saved_page_cursor', 'The saved-page cursor is invalid.');
+      }
+    }
     const result = await db.query<{ path: string; title: string; created_at: string }>(
-      'SELECT page_path AS path, title, created_at FROM user_saved_pages WHERE user_id = $1 ORDER BY created_at DESC',
-      [req.user!.id],
+      `SELECT page_path AS path, title, created_at
+       FROM user_saved_pages
+       WHERE user_id = $1
+         AND ($2::timestamptz IS NULL OR (created_at, page_path) < ($2::timestamptz, $3::varchar))
+       ORDER BY created_at DESC, page_path DESC
+       LIMIT $4`,
+      [req.user!.id, cursor?.createdAt ?? null, cursor?.path ?? null, limit + 1],
     );
-    res.json({ items: result.rows });
+    const hasMore = result.rows.length > limit;
+    const items = result.rows.slice(0, limit);
+    const lastItem = items.at(-1);
+    const nextCursor = hasMore && lastItem
+      ? Buffer.from(JSON.stringify({ createdAt: lastItem.created_at, path: lastItem.path })).toString('base64url')
+      : null;
+    res.json({ items, nextCursor, hasMore });
   } catch (error) {
+    if (error instanceof z.ZodError) return next(new AppError(422, 'invalid_saved_page_pagination', 'Saved-page pagination is invalid.'));
     next(error);
   }
 });

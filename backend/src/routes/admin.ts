@@ -130,18 +130,23 @@ router.get('/content-review-queue', async (req, res, next) => {
           id, title, slug, updated_at
         FROM events
         WHERE published = TRUE AND moderation_status = 'approved'
+      ), review_history AS (
+        SELECT content.resource_type, content.id::text AS resource_id,
+          MAX(audit.occurred_at) AS last_reviewed_at
+        FROM published_content content
+        JOIN audit_events audit
+          ON audit.resource_type = content.resource_type
+         AND audit.resource_id = content.id::text
+         AND audit.action = 'admin.content.review'
+        GROUP BY content.resource_type, content.id
       ), review_state AS (
         SELECT content.resource, content.resource_type, content.id, content.title, content.slug,
           content.updated_at, review.last_reviewed_at,
           GREATEST(content.updated_at, COALESCE(review.last_reviewed_at, content.updated_at)) AS reviewed_or_edited_at
         FROM published_content content
-        LEFT JOIN LATERAL (
-          SELECT MAX(occurred_at) AS last_reviewed_at
-          FROM audit_events
-          WHERE action = 'admin.content.review'
-            AND resource_type = content.resource_type
-            AND resource_id = content.id::text
-        ) review ON TRUE
+        LEFT JOIN review_history review
+          ON review.resource_type = content.resource_type
+         AND review.resource_id = content.id::text
       )
       SELECT resource, id::text AS id, title, slug, updated_at, last_reviewed_at,
         reviewed_or_edited_at AS last_reviewed_or_edited_at,
@@ -194,27 +199,35 @@ router.get('/me', (req, res) => {
 
 router.get('/overview', async (_req, res, next) => {
   try {
-    const [blogs, events, pendingBlogs, pendingEvents, inquiries, subscribers, users] = await Promise.all([
-      db.query<{ count: string }>('SELECT count(*)::text AS count FROM blog_posts'),
-      db.query<{ count: string }>('SELECT count(*)::text AS count FROM events'),
-      db.query<{ count: string }>("SELECT count(*)::text AS count FROM blog_posts WHERE moderation_status = 'pending_review'"),
-      db.query<{ count: string }>("SELECT count(*)::text AS count FROM events WHERE moderation_status = 'pending_review'"),
-      db.query<{ count: string }>("SELECT count(*)::text AS count FROM contact_inquiries WHERE status IN ('received', 'triaged', 'in_progress')"),
-      db.query<{ count: string }>("SELECT count(*)::text AS count FROM newsletter_subscriptions WHERE status = 'active'"),
-      db.query<{ count: string }>('SELECT count(*)::text AS count FROM users'),
-    ]);
+    const { rows } = await db.query<{
+      blogs: string;
+      events: string;
+      pending_blogs: string;
+      pending_events: string;
+      open_inquiries: string;
+      active_subscribers: string;
+      users: string;
+    }>(`SELECT
+      (SELECT count(*)::text FROM blog_posts) AS blogs,
+      (SELECT count(*)::text FROM events) AS events,
+      (SELECT count(*)::text FROM blog_posts WHERE moderation_status = 'pending_review') AS pending_blogs,
+      (SELECT count(*)::text FROM events WHERE moderation_status = 'pending_review') AS pending_events,
+      (SELECT count(*)::text FROM contact_inquiries WHERE status IN ('received', 'triaged', 'in_progress')) AS open_inquiries,
+      (SELECT count(*)::text FROM newsletter_subscriptions WHERE status = 'active') AS active_subscribers,
+      (SELECT count(*)::text FROM users) AS users`);
+    const counts = rows[0];
     res.json({
       generatedAt: new Date().toISOString(),
       content: {
-        blogs: Number(blogs.rows[0]?.count ?? 0),
-        events: Number(events.rows[0]?.count ?? 0),
-        pendingReview: Number(pendingBlogs.rows[0]?.count ?? 0) + Number(pendingEvents.rows[0]?.count ?? 0),
+        blogs: Number(counts?.blogs ?? 0),
+        events: Number(counts?.events ?? 0),
+        pendingReview: Number(counts?.pending_blogs ?? 0) + Number(counts?.pending_events ?? 0),
       },
       submissions: {
-        openInquiries: Number(inquiries.rows[0]?.count ?? 0),
-        activeSubscribers: Number(subscribers.rows[0]?.count ?? 0),
+        openInquiries: Number(counts?.open_inquiries ?? 0),
+        activeSubscribers: Number(counts?.active_subscribers ?? 0),
       },
-      users: Number(users.rows[0]?.count ?? 0),
+      users: Number(counts?.users ?? 0),
       database: await databaseSnapshot(),
     });
   } catch (error) {
