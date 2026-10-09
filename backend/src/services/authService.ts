@@ -12,7 +12,7 @@ import { hashOneTimeCode } from '../utils/otp.js';
 
 const scrypt = promisify(scryptCallback);
 const PASSWORD_KEY_LENGTH = 64;
-const googleClient = new OAuth2Client();
+const googleClient = new OAuth2Client({ transporterOptions: { timeout: 5000, retry: false } });
 const GOOGLE_VERIFICATION_RETRY_DELAYS_MS = [250, 600];
 
 function isTransientGoogleVerificationError(error: unknown): boolean {
@@ -28,12 +28,13 @@ async function verifyGoogleIdToken(idToken: string, audience: string) {
       const retryDelay = GOOGLE_VERIFICATION_RETRY_DELAYS_MS[attempt];
       if (retryDelay === undefined || !isTransientGoogleVerificationError(error)) throw error;
 
+      const jitterMs = randomInt(0, 151);
       logger.warn('google_verification_retry', {
         attempt: attempt + 1,
-        delayMs: retryDelay,
-        message: error instanceof Error ? error.message : 'Google verification request failed.',
+        delayMs: retryDelay + jitterMs,
+        errorName: error instanceof Error ? error.name : 'UnknownError',
       });
-      await new Promise(resolve => setTimeout(resolve, retryDelay));
+      await new Promise(resolve => setTimeout(resolve, retryDelay + jitterMs));
     }
   }
 }
@@ -63,7 +64,21 @@ export async function verifySignupChallenge(token: string | undefined, remoteIp?
   } catch {
     throw new AppError(503, 'signup_challenge_unavailable', 'The security check is temporarily unavailable. Please try again.');
   }
-  if (!result || typeof result !== 'object' || !('success' in result) || result.success !== true || !('action' in result) || result.action !== 'signup') {
+  const allowedHostnames = new Set(
+    [env.FRONTEND_URL, ...env.CORS_ORIGIN.split(',')]
+      .map((origin) => origin.trim())
+      .filter(Boolean)
+      .map((origin) => {
+        try { return new URL(origin).hostname; } catch { return ''; }
+      })
+      .filter(Boolean),
+  );
+  if (
+    !result || typeof result !== 'object' ||
+    !('success' in result) || result.success !== true ||
+    !('action' in result) || result.action !== 'signup' ||
+    !('hostname' in result) || typeof result.hostname !== 'string' || !allowedHostnames.has(result.hostname)
+  ) {
     throw new AppError(400, 'signup_challenge_failed', 'The security check expired or could not be verified. Please complete it again.');
   }
 }
@@ -324,11 +339,17 @@ export async function authenticateGoogleUser(idToken: string): Promise<AuthUser>
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (isTransientGoogleVerificationError(error)) {
-      logger.error('google_provider_unavailable', { message });
+      logger.error('google_provider_unavailable', {
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+      });
       throw new AppError(503, 'google_auth_unavailable', 'Google sign-in is temporarily unavailable.');
     }
     logger.warn('google_token_rejected', {
-      reason: message,
+      reason: /audience|azp|client.?id|recipient/i.test(message)
+        ? 'client_mismatch'
+        : /expired|too late|issued at|iat|exp/i.test(message)
+          ? 'expired_token'
+          : 'invalid_token',
       configuredClientId: env.GOOGLE_CLIENT_ID,
     });
     if (/audience|azp|client.?id|recipient/i.test(message)) {

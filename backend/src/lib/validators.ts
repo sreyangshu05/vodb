@@ -18,6 +18,8 @@ export const newsletterSchema = z.object({
 
 export const newsletterTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{32,128}$/);
 export const newsletterDeliveryWebhookSchema = z.object({
+  eventId: z.string().trim().min(1).max(200),
+  occurredAt: z.string().datetime({ offset: true }),
   event: z.enum(['delivered', 'bounce', 'complaint']),
   email: emailSchema,
 });

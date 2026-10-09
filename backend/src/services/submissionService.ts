@@ -165,17 +165,33 @@ export async function unsubscribeNewsletter(token: string) {
   if (!result.rows[0]) throw new AppError(400, 'invalid_subscription_token', 'This subscription link is invalid, expired, or already used.');
 }
 
-export async function processNewsletterDeliveryEvent(event: 'delivered' | 'bounce' | 'complaint', email: string) {
-  const status = event === 'bounce' ? 'bounced' : event === 'complaint' ? 'complained' : null;
+export async function processNewsletterDeliveryEvent(input: {
+  eventId: string;
+  occurredAt: string;
+  event: 'delivered' | 'bounce' | 'complaint';
+  email: string;
+}) {
   await db.query(
-    status
-      ? `UPDATE newsletter_subscriptions
-         SET status = $1, updated_at = NOW(), last_delivery_at = NOW()
-         WHERE lower(email) = lower($2) AND status NOT IN ('unsubscribed', 'complained')`
-      : `UPDATE newsletter_subscriptions
-         SET last_delivery_at = NOW(), updated_at = NOW()
-         WHERE lower(email) = lower($1)`,
-    status ? [status, email] : [email],
+    `WITH recorded AS (
+       INSERT INTO newsletter_delivery_webhook_events (event_id, event_type, occurred_at)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (event_id) DO NOTHING
+       RETURNING event_id
+     )
+     UPDATE newsletter_subscriptions subscription
+     SET status = CASE
+           WHEN $2 = 'complaint' THEN 'complained'
+           WHEN $2 = 'bounce' THEN 'bounced'
+           ELSE subscription.status
+         END,
+         last_delivery_at = $3,
+         updated_at = NOW()
+     FROM recorded
+     WHERE lower(subscription.email) = lower($4)
+       AND subscription.status <> 'unsubscribed'
+       AND ($2 <> 'bounce' OR subscription.status <> 'complained')
+       AND (subscription.last_delivery_at IS NULL OR $3 >= subscription.last_delivery_at)`,
+    [input.eventId, input.event, input.occurredAt, input.email],
   );
 }
 

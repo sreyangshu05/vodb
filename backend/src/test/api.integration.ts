@@ -8,7 +8,7 @@ import { waitForAuditWrites } from '../services/auditService.js';
 import { env } from '../config/env.js';
 import { createPasswordReset, signToken } from '../services/authService.js';
 import { createMediaAccess, resolveMediaToken } from '../services/mediaService.js';
-import { createNewsletterSubscription } from '../services/submissionService.js';
+import { createNewsletterSubscription, processNewsletterDeliveryEvent } from '../services/submissionService.js';
 
 const integrationEnabled = process.env.BACKEND_TEST_DATABASE_MODE === 'available';
 
@@ -295,5 +295,44 @@ test('concurrent newsletter submissions do not rotate a valid pending confirmati
     assert.equal(typeof stored.rows[0]?.confirmation_token_hash, 'string');
   } finally {
     await db.query('DELETE FROM newsletter_subscriptions WHERE lower(email) = lower($1)', [email]);
+  }
+});
+
+test('newsletter delivery webhooks deduplicate provider retries and ignore out-of-order events', {
+  skip: integrationEnabled ? false : 'set BACKEND_TEST_DATABASE_MODE=available to run database integration tests',
+}, async () => {
+  const email = `delivery-webhook-${Date.now()}@example.com`;
+  const laterEventId = randomUUID();
+  const earlierEventId = randomUUID();
+  const laterTime = new Date(Date.now() - 1000).toISOString();
+  const earlierTime = new Date(Date.now() - 60_000).toISOString();
+
+  try {
+    await db.query(
+      `INSERT INTO newsletter_subscriptions (email, status, consented_at, confirmed_at)
+       VALUES ($1, 'active', NOW(), NOW())`,
+      [email],
+    );
+
+    const bounce = { eventId: laterEventId, occurredAt: laterTime, event: 'bounce' as const, email };
+    await processNewsletterDeliveryEvent(bounce);
+    await processNewsletterDeliveryEvent(bounce);
+    await processNewsletterDeliveryEvent({ ...bounce, eventId: earlierEventId, occurredAt: earlierTime, event: 'delivered' });
+
+    const subscription = await db.query<{ status: string; last_delivery_at: string }>(
+      'SELECT status, last_delivery_at FROM newsletter_subscriptions WHERE lower(email) = lower($1)',
+      [email],
+    );
+    assert.equal(subscription.rows[0]?.status, 'bounced');
+    assert.equal(new Date(subscription.rows[0]!.last_delivery_at).toISOString(), laterTime);
+
+    const events = await db.query<{ count: string }>(
+      'SELECT count(*)::text AS count FROM newsletter_delivery_webhook_events WHERE event_id = ANY($1::varchar[])',
+      [[laterEventId, earlierEventId]],
+    );
+    assert.equal(events.rows[0]?.count, '2');
+  } finally {
+    await db.query('DELETE FROM newsletter_subscriptions WHERE lower(email) = lower($1)', [email]);
+    await db.query('DELETE FROM newsletter_delivery_webhook_events WHERE event_id = ANY($1::varchar[])', [[laterEventId, earlierEventId]]);
   }
 });

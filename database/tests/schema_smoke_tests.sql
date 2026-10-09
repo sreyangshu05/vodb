@@ -14,6 +14,7 @@ BEGIN
   ASSERT (EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'media_assets' AND column_name = 'source_path')), 'media_assets.source_path column missing';
   ASSERT (EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'password_reset_otps')), 'password_reset_otps table missing';
   ASSERT (EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'rate_limit_buckets')), 'rate_limit_buckets table missing';
+  ASSERT (EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'newsletter_delivery_webhook_events')), 'newsletter_delivery_webhook_events table missing';
   ASSERT (EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'blog_posts' AND column_name = 'moderation_status')), 'blog_posts.moderation_status column missing';
   ASSERT (EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'events' AND column_name = 'moderation_status')), 'events.moderation_status column missing';
   ASSERT (EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'events' AND column_name = 'all_day')), 'events.all_day column missing';
@@ -30,6 +31,7 @@ BEGIN
   ASSERT (EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'uq_users_email_lower')), 'Missing case-insensitive user email unique index';
   ASSERT (EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'uq_users_google_subject')), 'Missing Google subject unique index';
   ASSERT (EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'protected_media_access_log_retention_idx')), 'Missing media access retention index';
+  ASSERT (EXISTS (SELECT 1 FROM pg_indexes WHERE tablename = 'newsletter_delivery_webhook_events' AND indexname = 'newsletter_delivery_webhook_events_pkey')), 'Newsletter webhook event IDs must be unique';
 END $$;
 
 DO $$

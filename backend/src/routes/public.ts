@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { createRateLimiter } from '../middleware/rateLimit.js';
-import crypto from 'node:crypto';
 import { AppError } from '../utils/errors.js';
 import { contactSchema, newsletterDeliveryWebhookSchema, newsletterSchema, newsletterTokenSchema } from '../lib/validators.js';
 import { confirmNewsletterSubscription, createContactInquiry, createNewsletterSubscription, discardNewsletterSubscription, processNewsletterDeliveryEvent, resendPendingNewsletterConfirmation, restorePendingNewsletterConfirmation, unsubscribeNewsletter } from '../services/submissionService.js';
@@ -9,6 +8,7 @@ import { sendNewsletterConfirmation } from '../services/mailService.js';
 import { getBlogBySlug, getEventBySlug, listPublishedBlogs, listPublishedEvents, searchPublishedContent } from '../services/contentService.js';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
+import { verifyNewsletterWebhookSignature } from '../services/newsletterWebhook.js';
 
 const router = Router();
 const paginationSchema = z.object({
@@ -56,6 +56,13 @@ const newsletterResendLimiter = createRateLimiter({
   identity: (req) => typeof req.body?.email === 'string' ? req.body.email : undefined,
   message: 'Too many confirmation requests. Please wait before trying again.',
 });
+const newsletterWebhookLimiter = createRateLimiter({
+  windowMs: env.NEWSLETTER_WEBHOOK_RATE_LIMIT_WINDOW_MS,
+  max: env.NEWSLETTER_WEBHOOK_RATE_LIMIT_MAX_REQUESTS,
+  shared: true,
+  keyPrefix: 'newsletter-webhook',
+  message: 'Newsletter delivery events are temporarily rate limited. Please retry later.',
+});
 
 const contentSearchLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 40, shared: true, keyPrefix: 'content-search', message: 'Too many search requests. Please wait before trying again.' });
 const contactLimiter = createRateLimiter({
@@ -68,7 +75,10 @@ const contactLimiter = createRateLimiter({
   message: 'Too many contact submissions. Please wait before sending another message.',
 });
 
-router.use(publicLimiter);
+router.use((req, res, next) => {
+  if (req.path === '/newsletter/webhooks/delivery') return next();
+  return publicLimiter(req, res, next);
+});
 
 router.get('/blogs', async (req, res, next) => {
   try {
@@ -182,7 +192,10 @@ router.post('/newsletter/resend-confirmation', newsletterResendLimiter, async (r
           await sendNewsletterConfirmation(pending.email, pending.confirmationToken, pending.unsubscribeToken);
         } catch (error) {
           await restorePendingNewsletterConfirmation(pending.email, pending.confirmationToken, pending.previousTokenState);
-          logger.warn('newsletter_confirmation_resend_failed', { requestId: req.get('x-request-id'), message: error instanceof Error ? error.message : 'Email delivery failed' });
+          logger.warn('newsletter_confirmation_resend_failed', {
+            requestId: req.get('x-request-id'),
+            errorName: error instanceof Error ? error.name : 'UnknownError',
+          });
           throw error;
         }
       }
@@ -224,16 +237,19 @@ router.post('/newsletter/unsubscribe', async (req, res, next) => {
   }
 });
 
-router.post('/newsletter/webhooks/delivery', async (req, res, next) => {
+router.post('/newsletter/webhooks/delivery', newsletterWebhookLimiter, async (req, res, next) => {
   try {
     if (!env.NEWSLETTER_WEBHOOK_SECRET) throw new AppError(503, 'newsletter_webhook_unavailable', 'Newsletter webhook verification is not configured.');
     const signature = req.get('x-newsletter-signature') ?? '';
-    const expected = crypto.createHmac('sha256', env.NEWSLETTER_WEBHOOK_SECRET).update(JSON.stringify(req.body ?? {})).digest('hex');
-    if (signature.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
+    const rawBody = (req as typeof req & { rawBody?: Buffer }).rawBody;
+    if (!rawBody || !verifyNewsletterWebhookSignature(rawBody, signature, env.NEWSLETTER_WEBHOOK_SECRET)) {
       throw new AppError(401, 'invalid_webhook_signature', 'Newsletter webhook signature is invalid.');
     }
     const payload = newsletterDeliveryWebhookSchema.parse(req.body ?? {});
-    await processNewsletterDeliveryEvent(payload.event, payload.email);
+    if (Date.parse(payload.occurredAt) > Date.now() + 5 * 60 * 1000) {
+      throw new AppError(422, 'invalid_webhook_payload', 'Newsletter webhook payload is invalid.');
+    }
+    await processNewsletterDeliveryEvent(payload);
     res.status(204).send();
   } catch (error) {
     if (error instanceof z.ZodError) return next(new AppError(422, 'invalid_webhook_payload', 'Newsletter webhook payload is invalid.', { issues: error.issues }));

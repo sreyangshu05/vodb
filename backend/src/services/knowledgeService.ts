@@ -2,6 +2,42 @@ import { z } from 'zod';
 import { env } from '../config/env.js';
 
 type ChatResponse = { choices?: Array<{ message?: { content?: string } }> };
+const MAX_AI_RESPONSE_BYTES = 128 * 1024;
+
+export async function readBoundedAiResponse(response: Response): Promise<unknown> {
+  if (!response.headers.get('content-type')?.toLowerCase().includes('application/json')) {
+    await response.body?.cancel();
+    throw new Error('AI provider response was not JSON.');
+  }
+  const declaredLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_AI_RESPONSE_BYTES) {
+    await response.body?.cancel();
+    throw new Error('AI provider response exceeded the configured limit.');
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('AI provider response body is missing.');
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalBytes += value.byteLength;
+    if (totalBytes > MAX_AI_RESPONSE_BYTES) {
+      await reader.cancel();
+      throw new Error('AI provider response exceeded the configured limit.');
+    }
+    chunks.push(value);
+  }
+
+  const body = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return JSON.parse(new TextDecoder().decode(body)) as unknown;
+}
 
 class AiProviderError extends Error {
   constructor(message = 'The AI provider is temporarily unavailable.') {
@@ -51,7 +87,7 @@ async function complete(prompt: string, system: string): Promise<string> {
     throw new AiProviderError();
   }
   if (!response.ok) throw new AiProviderError();
-  const payload = await response.json() as ChatResponse;
+  const payload = await readBoundedAiResponse(response) as ChatResponse;
   const text = payload.choices?.[0]?.message?.content;
   if (typeof text !== 'string' || !text.trim()) throw new AiProviderError();
   return text.trim();

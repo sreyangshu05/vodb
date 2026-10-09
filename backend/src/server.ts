@@ -87,7 +87,12 @@ app.use((req, res, next) => {
   });
   next();
 });
-const standardJsonParser = express.json({ limit: '1mb' });
+const standardJsonParser = express.json({
+  limit: '1mb',
+  verify: (req, _res, buffer) => {
+    (req as typeof req & { rawBody?: Buffer }).rawBody = Buffer.from(buffer);
+  },
+});
 app.use((req, res, next) => {
   if (req.method === 'POST' && req.path.replace(/\/+$/, '') === '/api/v1/media/upload') {
     return next();

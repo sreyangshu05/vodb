@@ -1,5 +1,6 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 import type { Request } from 'express';
 import request from 'supertest';
 import app from '../server.js';
@@ -187,6 +188,21 @@ test('admin audience APIs require authentication', async () => {
     assert.equal(response.status, 401);
     assert.equal(response.body.error, 'unauthorized');
   }
+});
+
+test('newsletter delivery webhook rejects signatures over re-serialized JSON instead of raw bytes', async () => {
+  const rawBody = '{ "eventId":"smoke-event", "occurredAt":"2026-10-09T00:00:00.000Z", "event":"delivered", "email":"reader@example.com" }';
+  const signature = env.NEWSLETTER_WEBHOOK_SECRET
+    ? createHmac('sha256', env.NEWSLETTER_WEBHOOK_SECRET).update(JSON.stringify(JSON.parse(rawBody))).digest('hex')
+    : '0'.repeat(64);
+  const response = await request(app)
+    .post('/api/v1/newsletter/webhooks/delivery')
+    .set('Content-Type', 'application/json')
+    .set('X-Newsletter-Signature', signature)
+    .send(rawBody);
+
+  assert.equal(response.status, env.NEWSLETTER_WEBHOOK_SECRET ? 401 : 503);
+  assert.equal(response.body.error, env.NEWSLETTER_WEBHOOK_SECRET ? 'invalid_webhook_signature' : 'newsletter_webhook_unavailable');
 });
 
 test('saved-page API rejects external and backslash-normalized paths', async () => {

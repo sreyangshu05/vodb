@@ -51,6 +51,8 @@ const envSchema = z.object({
   NEWSLETTER_RATE_LIMIT_WINDOW_MS: z.coerce.number().default(60000),
   NEWSLETTER_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().default(10),
   NEWSLETTER_WEBHOOK_SECRET: z.preprocess((value) => value === '' ? undefined : value, z.string().min(16).optional()),
+  NEWSLETTER_WEBHOOK_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60000),
+  NEWSLETTER_WEBHOOK_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(300),
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
   FRONTEND_URL: z.string().url().default('http://localhost:5173'),
   OBSERVABILITY_TOKEN: z.preprocess((value) => value === '' ? undefined : value, z.string().min(16).optional()),

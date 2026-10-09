@@ -53,6 +53,18 @@ const policies = [
     )
     DELETE FROM api_error_logs target USING expired WHERE target.id = expired.id`,
   },
+  {
+    name: 'newsletter_delivery_webhook_events',
+    countSql: "SELECT count(*)::bigint AS count FROM newsletter_delivery_webhook_events WHERE received_at < now() - interval '90 days'",
+    deleteSql: `WITH expired AS (
+      SELECT event_id FROM newsletter_delivery_webhook_events
+      WHERE received_at < now() - interval '90 days'
+      ORDER BY received_at, event_id
+      LIMIT $1
+      FOR UPDATE SKIP LOCKED
+    )
+    DELETE FROM newsletter_delivery_webhook_events target USING expired WHERE target.event_id = expired.event_id`,
+  },
 ];
 
 try {
