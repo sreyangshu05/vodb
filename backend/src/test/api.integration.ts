@@ -124,6 +124,36 @@ test('a revoked account token stops authenticating while a newly signed token re
   }
 });
 
+test('an admin token loses administrative access immediately after database role demotion', {
+  skip: integrationEnabled ? false : 'set BACKEND_TEST_DATABASE_MODE=available to run database integration tests',
+}, async () => {
+  const email = `role-demotion-${Date.now()}@example.com`;
+  let userId: string | undefined;
+
+  try {
+    const created = await db.query<{ id: string; name: string; email: string; role: 'admin' }>(
+      `INSERT INTO users (name, email, password_hash, email_verified, role)
+       VALUES ('Role Demotion Test', $1, 'test-hash', TRUE, 'admin')
+       RETURNING id, name, email, role`,
+      [email],
+    );
+    const user = created.rows[0]!;
+    userId = user.id;
+    const adminToken = await signToken(user);
+
+    await db.query("UPDATE users SET role = 'member' WHERE id = $1", [user.id]);
+
+    const response = await request(app)
+      .get('/api/v1/admin/me')
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    assert.equal(response.status, 403);
+    assert.equal(response.body.error, 'forbidden');
+  } finally {
+    if (userId) await db.query('DELETE FROM users WHERE id = $1', [userId]);
+  }
+});
+
 test('password reset refreshes the active matching session while revoking its old token', {
   skip: integrationEnabled ? false : 'set BACKEND_TEST_DATABASE_MODE=available to run database integration tests',
 }, async () => {

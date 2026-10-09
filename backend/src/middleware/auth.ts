@@ -21,14 +21,16 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
   }
 
   try {
+    let currentRole = payload.role;
     if (USER_ID_PATTERN.test(payload.sub)) {
-      const result = await db.query<{ token_version: number }>(
-        'SELECT token_version FROM users WHERE id = $1',
+      const result = await db.query<{ token_version: number; role: 'member' | 'editor' | 'admin' }>(
+        'SELECT token_version, role FROM users WHERE id = $1',
         [payload.sub],
       );
       if (!result.rows[0] || result.rows[0].token_version !== payload.tokenVersion) {
         return next(new AppError(401, 'invalid_token', 'Authentication token is invalid or expired.'));
       }
+      currentRole = result.rows[0].role;
     } else if (!(payload.configuredAdmin || env.NODE_ENV === 'test')) {
       return next(new AppError(401, 'invalid_token', 'Authentication token is invalid or expired.'));
     }
@@ -36,7 +38,10 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
       id: payload.sub,
       name: payload.name,
       email: payload.email,
-      role: payload.role,
+      // Authorization must reflect current database permissions. A JWT can
+      // remain valid after an operator demotes a user, so never authorize from
+      // its potentially stale role claim.
+      role: currentRole,
     };
     return next();
   } catch (error) {
