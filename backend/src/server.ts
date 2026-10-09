@@ -1,7 +1,6 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import morgan from 'morgan';
 import { fileURLToPath } from 'node:url';
 import { env } from './config/env.js';
 import publicRouter from './routes/public.js';
@@ -75,7 +74,19 @@ app.use(helmet({
     },
   },
 }));
-app.use(morgan((tokens, req, res) => `${tokens.method(req, res)} ${req.path} ${tokens.status(req, res)} ${tokens['response-time'](req, res)} ms`));
+app.use((req, res, next) => {
+  const requestStartedAt = process.hrtime.bigint();
+  res.once('finish', () => {
+    const responseTimeMs = Number(process.hrtime.bigint() - requestStartedAt) / 1_000_000;
+    logger.info('http_request', {
+      method: req.method,
+      path: req.path,
+      status: res.statusCode,
+      responseTimeMs: Number(responseTimeMs.toFixed(3)),
+    });
+  });
+  next();
+});
 const standardJsonParser = express.json({ limit: '1mb' });
 app.use((req, res, next) => {
   if (req.method === 'POST' && req.path.replace(/\/+$/, '') === '/api/v1/media/upload') {

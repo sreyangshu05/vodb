@@ -8,10 +8,24 @@ import { logger } from '../utils/logger.js';
 // make an If-Match value from the API response unusable in the next write.
 types.setTypeParser(1184, (value) => value);
 
+function normalizeDatabaseUrlSslMode(databaseUrl: string): string {
+  const parsedUrl = new URL(databaseUrl);
+  const sslMode = parsedUrl.searchParams.get('sslmode')?.toLowerCase();
+  const usesLibpqCompat = parsedUrl.searchParams.get('uselibpqcompat')?.toLowerCase() === 'true';
+
+  // pg-connection-string currently treats these aliases as verify-full. Make
+  // that intent explicit so a future pg major version cannot weaken TLS.
+  if (!usesLibpqCompat && ['prefer', 'require', 'verify-ca'].includes(sslMode ?? '')) {
+    parsedUrl.searchParams.set('sslmode', 'verify-full');
+  }
+
+  return parsedUrl.toString();
+}
+
 const pool = new Pool({
   ...(env.DATABASE_URL
     ? {
-        connectionString: env.DATABASE_URL,
+        connectionString: normalizeDatabaseUrlSslMode(env.DATABASE_URL),
         ...(env.NODE_ENV === 'production' ? { ssl: { rejectUnauthorized: true } } : {}),
       }
     : {
