@@ -284,7 +284,7 @@ router.get('/audit-events', async (req, res, next) => {
     const countResult = await db.query<{ count: string }>(`SELECT count(*)::text AS count FROM audit_events ${where}`, values);
     values.push(limit, offset);
     const result = await db.query(`SELECT id, actor_id, action, resource_type, resource_id, metadata, request_id, occurred_at
-      FROM audit_events ${where} ORDER BY occurred_at DESC LIMIT $${values.length - 1} OFFSET $${values.length}`, values);
+      FROM audit_events ${where} ORDER BY occurred_at DESC, id ASC LIMIT $${values.length - 1} OFFSET $${values.length}`, values);
     res.json({ items: result.rows, total: Number(countResult.rows[0]?.count ?? 0), limit, offset });
   } catch (error) {
     if (error instanceof z.ZodError) return next(new AppError(422, 'invalid_query', 'Audit filters are invalid.', { issues: error.issues }));
@@ -309,7 +309,7 @@ router.get('/inquiries', async (req, res, next) => {
     const result = await db.query(
       `SELECT id, name, CONCAT(LEFT(split_part(email, '@', 1), 1), '***@', split_part(email, '@', 2)) AS email,
        subject, LEFT(message, 180) AS message_preview, status, source, spam_score, created_at, updated_at
-       FROM contact_inquiries ${where} ORDER BY created_at DESC LIMIT $${resultValues.length - 1} OFFSET $${resultValues.length}`,
+       FROM contact_inquiries ${where} ORDER BY created_at DESC, id ASC LIMIT $${resultValues.length - 1} OFFSET $${resultValues.length}`,
       resultValues);
     res.json({ items: result.rows, total: Number(count.rows[0]?.count ?? 0), limit, offset });
   } catch (error) {
@@ -369,7 +369,7 @@ router.get('/subscribers', async (req, res, next) => {
     const result = await db.query(
       `SELECT id, CONCAT(LEFT(split_part(email, '@', 1), 1), '***@', split_part(email, '@', 2)) AS email,
        status, source, consented_at, confirmed_at, last_delivery_at, created_at, updated_at
-       FROM newsletter_subscriptions ${where} ORDER BY created_at DESC LIMIT $${resultValues.length - 1} OFFSET $${resultValues.length}`,
+       FROM newsletter_subscriptions ${where} ORDER BY created_at DESC, id ASC LIMIT $${resultValues.length - 1} OFFSET $${resultValues.length}`,
       resultValues);
     res.json({ items: result.rows, total: Number(count.rows[0]?.count ?? 0), limit, offset });
   } catch (error) {
@@ -395,7 +395,7 @@ router.get('/users', async (req, res, next) => {
     const result = await db.query(
       `SELECT id, name, CONCAT(LEFT(split_part(email, '@', 1), 1), '***@', split_part(email, '@', 2)) AS email,
        role, auth_provider, created_at, updated_at
-       FROM users ${where} ORDER BY created_at DESC LIMIT $${resultValues.length - 1} OFFSET $${resultValues.length}`,
+       FROM users ${where} ORDER BY created_at DESC, id ASC LIMIT $${resultValues.length - 1} OFFSET $${resultValues.length}`,
       resultValues);
     res.json({ items: result.rows, total: Number(count.rows[0]?.count ?? 0), limit, offset });
   } catch (error) {
@@ -407,7 +407,7 @@ router.get('/users', async (req, res, next) => {
 router.get('/blogs', async (req, res, next) => {
   try {
     const { limit, offset } = paginationSchema.parse(req.query);
-    const result = await db.query(`SELECT * FROM blog_posts ORDER BY created_at DESC LIMIT $1 OFFSET $2`, [limit, offset]);
+    const result = await db.query(`SELECT * FROM blog_posts ORDER BY created_at DESC, id ASC LIMIT $1 OFFSET $2`, [limit, offset]);
     res.json(result.rows);
   } catch (error) {
     next(error);
@@ -511,7 +511,7 @@ router.delete('/blogs/:id', async (req, res, next) => {
 router.get('/events', async (req, res, next) => {
   try {
     const { limit, offset } = paginationSchema.parse(req.query);
-    const result = await db.query(`SELECT * FROM events ORDER BY created_at DESC LIMIT $1 OFFSET $2`, [limit, offset]);
+    const result = await db.query(`SELECT * FROM events ORDER BY created_at DESC, id ASC LIMIT $1 OFFSET $2`, [limit, offset]);
     res.json(result.rows);
   } catch (error) {
     next(error);

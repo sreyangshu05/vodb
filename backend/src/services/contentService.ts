@@ -14,7 +14,7 @@ export async function listPublishedBlogs(limit = 50, offset = 0) {
              m.alt_text AS image_alt
       FROM blog_posts b LEFT JOIN media_assets m ON m.id = b.image_media_id
       WHERE b.published = TRUE AND b.moderation_status = 'approved'
-      ORDER BY b.published_at DESC, b.created_at DESC
+      ORDER BY b.published_at DESC, b.created_at DESC, b.id ASC
       LIMIT $1 OFFSET $2
     `, [limit, offset]);
 
@@ -58,7 +58,7 @@ export async function listPublishedEvents(limit = 50, offset = 0) {
              m.alt_text AS image_alt
       FROM events e LEFT JOIN media_assets m ON m.id = e.image_media_id
       WHERE e.published = TRUE AND e.moderation_status = 'approved'
-      ORDER BY e.event_date ASC, e.created_at DESC
+      ORDER BY e.event_date ASC, e.created_at DESC, e.id ASC
       LIMIT $1 OFFSET $2
     `, [limit, offset]);
 
@@ -149,7 +149,7 @@ export async function searchPublishedContent(query: string, kind: PublishedSearc
       SELECT id, kind, title, slug, group_name, excerpt, score,
         COUNT(*) OVER()::text AS total
       FROM matches
-      ORDER BY score DESC, published_at DESC NULLS LAST, title ASC
+      ORDER BY score DESC, published_at DESC NULLS LAST, title ASC, kind ASC, id ASC
       LIMIT $3 OFFSET $4
     `, [query, kind, limit, offset]);
 

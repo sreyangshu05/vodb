@@ -452,9 +452,29 @@ test('newsletter token actions do not mutate state on GET and require valid POST
 });
 
 test('GET /api/v1/search validates query before database access', async () => {
-  const response = await request(app).get('/api/v1/search?q=x');
-  assert.equal(response.status, 422);
-  assert.equal(response.body.error, 'invalid_search_query');
+  const invalidQueries = [
+    '/api/v1/search?q=',
+    '/api/v1/search?q=%20%20',
+    '/api/v1/search?q=x',
+    `/api/v1/search?q=${'a'.repeat(161)}`,
+    '/api/v1/search?q=history&type=users',
+    '/api/v1/search?q=history&limit=51',
+    '/api/v1/search?q=history&offset=-1',
+    '/api/v1/search?q=history&offset=100001',
+  ];
+  const responses = await Promise.all(invalidQueries.map(path => request(app).get(path)));
+  for (const response of responses) {
+    assert.equal(response.status, 422);
+    assert.equal(response.body.error, 'invalid_search_query');
+  }
+
+  // The query language receives data values through bind parameters; unusual text is accepted
+  // as input and reaches the configured unavailable-database response in smoke mode.
+  for (const query of ['  Bengal   history  ', 'বাংলা ইতিহাস', `history ${'x'.repeat(140)}`, `history !@#$%^&*()`]) {
+    const response = await request(app).get(`/api/v1/search?q=${encodeURIComponent(query)}`);
+    assert.equal(response.status, 503);
+    assert.equal(response.body.error, 'content_service_unavailable');
+  }
 });
 
 test('editorial AI suggestions require admin authentication', async () => {
