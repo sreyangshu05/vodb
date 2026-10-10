@@ -18,7 +18,6 @@ export function requestIdMiddleware(req: Request, res: Response, next: NextFunct
     metrics.requestCompleted(metricRequest.key, res.statusCode, metricRequest.startedAt);
     logger.info('request_completed', {
       requestId,
-      userId: req.user?.id,
       method: req.method,
       route: metricRequest.key,
       status: res.statusCode,

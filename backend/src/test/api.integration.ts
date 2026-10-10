@@ -227,16 +227,16 @@ test('protected media requires explicit sharing when it has no owner', {
     mediaId = mediaResult.rows[0]!.id;
 
     await assert.rejects(
-      createMediaAccess(mediaId, userId, {}),
+      createMediaAccess(mediaId, userId),
       (error: unknown) => error instanceof Error && 'error' in error && error.error === 'media_not_found',
     );
     await assert.rejects(
-      createMediaAccess(mediaId, otherUserId, {}),
+      createMediaAccess(mediaId, otherUserId),
       (error: unknown) => error instanceof Error && 'error' in error && error.error === 'media_not_found',
     );
 
     await db.query('UPDATE protected_media SET is_shared = TRUE WHERE id = $1', [mediaId]);
-    const access = await createMediaAccess(mediaId, userId, {});
+    const access = await createMediaAccess(mediaId, userId);
     assert.equal(access.media.id, mediaId);
     assert.equal(typeof access.token, 'string');
 

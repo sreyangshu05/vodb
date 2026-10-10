@@ -34,13 +34,13 @@ export function apiErrorLogMiddleware(req: Request, res: Response, next: NextFun
     const routePath = req.route?.path;
     const endpointPath = typeof routePath === 'string'
       ? `${req.baseUrl}${routePath}`
-      : req.path;
+      : '<unmatched>';
     const endpoint = `${req.method} ${endpointPath}`.slice(0, 500);
     const errorMessage = typeof res.locals.apiErrorCode === 'string'
       ? res.locals.apiErrorCode
       : `http_${res.statusCode}`;
 
-    void db.logApiError({ endpoint, errorMessage, userId: req.user?.id });
+    void db.logApiError({ endpoint, errorMessage });
   });
 
   next();

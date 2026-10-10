@@ -29,7 +29,6 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
   const requestId = req.headers['x-request-id'];
   const requestContext = {
     requestId,
-    userId: req.user?.id,
     method: req.method,
     route: req.route?.path ?? '<unmatched>',
   };

@@ -42,7 +42,7 @@ const pool = new Pool({
   statement_timeout: env.DATABASE_STATEMENT_TIMEOUT_MS,
 });
 
-type ApiErrorLog = { occurredAt: string; endpoint: string; errorMessage: string; userId?: string };
+type ApiErrorLog = { occurredAt: string; endpoint: string; errorMessage: string };
 const pendingApiErrorLogs: ApiErrorLog[] = [];
 let flushingApiErrorLogs = false;
 let errorLogPersistenceWarningWritten = false;
@@ -55,9 +55,9 @@ async function flushPendingApiErrorLogs() {
     while (pendingApiErrorLogs.length > 0) {
       const entry = pendingApiErrorLogs[0];
       await pool.query(
-        `INSERT INTO api_error_logs (occurred_at, endpoint, error_message, user_id)
-         VALUES ($1, $2, $3, $4)`,
-        [entry.occurredAt, entry.endpoint, entry.errorMessage, entry.userId ?? null],
+        `INSERT INTO api_error_logs (occurred_at, endpoint, error_message)
+         VALUES ($1, $2, $3)`,
+        [entry.occurredAt, entry.endpoint, entry.errorMessage],
       );
       pendingApiErrorLogs.shift();
       errorLogPersistenceWarningWritten = false;
@@ -122,7 +122,7 @@ export const db = {
     }
     return result.rows[0];
   },
-  async logApiError(input: { endpoint: string; errorMessage: string; userId?: string }) {
+  async logApiError(input: { endpoint: string; errorMessage: string }) {
     if (pendingApiErrorLogs.length >= MAX_PENDING_API_ERROR_LOGS) {
       pendingApiErrorLogs.shift();
       logger.warn('api_error_log_queue_full', { droppedOldestEntry: true });
@@ -131,7 +131,6 @@ export const db = {
       occurredAt: new Date().toISOString(),
       endpoint: input.endpoint.slice(0, 500),
       errorMessage: input.errorMessage.slice(0, 4000),
-      userId: input.userId,
     });
     await flushPendingApiErrorLogs();
   },

@@ -18,6 +18,30 @@ const { Pool } = pg;
 const pool = new Pool(createMaintenanceDatabaseConfig(process.env, 1));
 const policies = [
   {
+    name: 'expired password reset codes',
+    countSql: 'SELECT count(*)::bigint AS count FROM password_reset_otps WHERE expires_at <= now()',
+    deleteSql: `WITH expired AS (
+      SELECT id FROM password_reset_otps
+      WHERE expires_at <= now()
+      ORDER BY expires_at, id
+      LIMIT $1
+      FOR UPDATE SKIP LOCKED
+    )
+    DELETE FROM password_reset_otps target USING expired WHERE target.id = expired.id`,
+  },
+  {
+    name: 'expired email verification codes',
+    countSql: 'SELECT count(*)::bigint AS count FROM reader_email_verification_otps WHERE expires_at <= now()',
+    deleteSql: `WITH expired AS (
+      SELECT user_id FROM reader_email_verification_otps
+      WHERE expires_at <= now()
+      ORDER BY expires_at, user_id
+      LIMIT $1
+      FOR UPDATE SKIP LOCKED
+    )
+    DELETE FROM reader_email_verification_otps target USING expired WHERE target.user_id = expired.user_id`,
+  },
+  {
     name: 'audit_events (excluding legal holds)',
     countSql: "SELECT count(*)::bigint AS count FROM audit_events WHERE occurred_at < now() - interval '7 years' AND legal_hold = FALSE",
     deleteSql: `WITH expired AS (

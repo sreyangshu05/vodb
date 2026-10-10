@@ -186,10 +186,7 @@ router.post('/:id/access', requireAuth, async (req, res, next) => {
   try {
     const parsed = mediaId.safeParse(req.params.id);
     if (!parsed.success) throw new AppError(400, 'invalid_media_id', 'Media id must be a UUID.');
-    const result = await createMediaAccess(parsed.data, req.user!.id, {
-      ip: req.ip,
-      userAgent: req.get('user-agent'),
-    });
+    const result = await createMediaAccess(parsed.data, req.user!.id);
     res.json({
       media: { id: result.media.id, title: result.media.title, mimeType: result.media.mime_type },
       token: result.token,

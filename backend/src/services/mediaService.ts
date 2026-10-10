@@ -48,7 +48,7 @@ function verify(token: string) {
   return { mediaId, userId };
 }
 
-export async function createMediaAccess(mediaId: string, userId: string, request: { ip?: string; userAgent?: string }) {
+export async function createMediaAccess(mediaId: string, userId: string) {
   const result = await db.query<MediaRow>(
     'SELECT id, storage_url, mime_type, title FROM protected_media WHERE id = $1 AND is_active = TRUE AND (owner_user_id = $2 OR is_shared = TRUE)',
     [mediaId, userId],
@@ -59,8 +59,8 @@ export async function createMediaAccess(mediaId: string, userId: string, request
   const expires = Math.floor(Date.now() / 1000) + env.MEDIA_TOKEN_TTL_SECONDS;
   const token = sign(media.id, userId, expires);
   await db.query(
-    'INSERT INTO protected_media_access_log (media_id, user_id, expires_at, ip_address, user_agent) VALUES ($1, $2, to_timestamp($3), $4, $5)',
-    [media.id, userId, expires, request.ip ?? null, request.userAgent ?? null],
+    'INSERT INTO protected_media_access_log (media_id, user_id, expires_at) VALUES ($1, $2, to_timestamp($3))',
+    [media.id, userId, expires],
   );
   return { media, token, expiresAt: new Date(expires * 1000).toISOString() };
 }
