@@ -1,4 +1,4 @@
-import test, { after } from 'node:test';
+import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac, randomUUID } from 'node:crypto';
 import express from 'express';
@@ -13,6 +13,20 @@ import { createNewsletterSubscription, processNewsletterDeliveryEvent } from '..
 import { createRateLimiter } from '../middleware/rateLimit.js';
 
 const integrationEnabled = process.env.BACKEND_TEST_DATABASE_MODE === 'available';
+
+before(async () => {
+  if (!integrationEnabled) return;
+
+  const expectedDatabase = process.env.BACKEND_TEST_DATABASE_NAME;
+  if (!expectedDatabase || !/(^|[_-])(test|testing|integration)([_-]|$)/i.test(expectedDatabase)) {
+    throw new Error('Integration tests require BACKEND_TEST_DATABASE_NAME to name a dedicated test database.');
+  }
+
+  const result = await db.query<{ database_name: string }>('SELECT current_database() AS database_name');
+  if (result.rows[0]?.database_name !== expectedDatabase) {
+    throw new Error('Connected PostgreSQL database does not match BACKEND_TEST_DATABASE_NAME; integration tests stopped before writing data.');
+  }
+});
 
 test('shared PostgreSQL rate limits remain atomic under concurrent requests', {
   skip: integrationEnabled ? false : 'set BACKEND_TEST_DATABASE_MODE=available to run database integration tests',
@@ -87,12 +101,118 @@ test('concurrent blog updates use optimistic concurrency and return one 409 conf
     assert.deepEqual([first.status, second.status].sort((a, b) => a - b), [200, 409]);
     const conflict = first.status === 409 ? first : second;
     assert.equal(conflict.body.error, 'concurrent_update');
+
+    const persisted = await db.query<{ title: string }>('SELECT title FROM blog_posts WHERE id = $1', [blogId]);
+    assert.equal(persisted.rows.length, 1);
+    assert.ok(['Concurrency Winner A', 'Concurrency Winner B'].includes(persisted.rows[0]!.title));
   } finally {
     if (blogId) {
       await db.query('DELETE FROM blog_posts WHERE id = $1', [blogId]);
     } else {
       await db.query('DELETE FROM blog_posts WHERE slug = $1', [slug]);
     }
+  }
+});
+
+test('admin APIs reject anonymous and member access, and report missing records without mutation', {
+  skip: integrationEnabled ? false : 'set BACKEND_TEST_DATABASE_MODE=available and BACKEND_TEST_DATABASE_NAME to run database integration tests',
+}, async () => {
+  const email = `integration-member-${randomUUID()}@example.com`;
+  let userId: string | undefined;
+
+  try {
+    const created = await db.query<{ id: string; name: string; email: string; role: 'member' }>(
+      `INSERT INTO users (name, email, password_hash, email_verified)
+       VALUES ('Integration Member', $1, 'test-hash', TRUE)
+       RETURNING id, name, email, role`,
+      [email],
+    );
+    const member = created.rows[0]!;
+    userId = member.id;
+    const memberToken = await signToken(member);
+    const adminToken = await signToken({
+      id: 'integration-admin',
+      email: 'integration-admin@example.com',
+      name: 'Integration Admin',
+      role: 'admin',
+    });
+
+    const anonymous = await request(app).get('/api/v1/admin/me');
+    assert.equal(anonymous.status, 401);
+    assert.equal(anonymous.body.error, 'unauthorized');
+
+    const forbidden = await request(app)
+      .get('/api/v1/admin/me')
+      .set('Authorization', `Bearer ${memberToken}`);
+    assert.equal(forbidden.status, 403);
+    assert.equal(forbidden.body.error, 'forbidden');
+
+    const missing = await request(app)
+      .get(`/api/v1/admin/inquiries/${randomUUID()}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    assert.equal(missing.status, 404);
+    assert.equal(missing.body.error, 'inquiry_not_found');
+
+    const stillPresent = await db.query<{ count: string }>(
+      'SELECT count(*)::text AS count FROM users WHERE id = $1 AND role = \'member\'',
+      [userId],
+    );
+    assert.equal(stillPresent.rows[0]?.count, '1');
+  } finally {
+    if (userId) await db.query('DELETE FROM users WHERE id = $1', [userId]);
+  }
+});
+
+test('expired bearer tokens are rejected by the API authentication middleware', {
+  skip: integrationEnabled ? false : 'set BACKEND_TEST_DATABASE_MODE=available and BACKEND_TEST_DATABASE_NAME to run database integration tests',
+}, async () => {
+  const { default: jwt } = await import('jsonwebtoken');
+  const expiredToken = jwt.sign({
+    sub: 'integration-expired-admin',
+    email: 'integration-expired-admin@example.com',
+    name: 'Expired Admin',
+    role: 'admin',
+    tokenVersion: 0,
+    configuredAdmin: true,
+    exp: Math.floor(Date.now() / 1000) - 60,
+  }, env.JWT_SECRET);
+
+  const response = await request(app)
+    .get('/api/v1/admin/me')
+    .set('Authorization', `Bearer ${expiredToken}`);
+  assert.equal(response.status, 401);
+  assert.equal(response.body.error, 'invalid_token');
+});
+
+test('PostgreSQL unique constraints reject duplicate blog slugs without altering the existing row', {
+  skip: integrationEnabled ? false : 'set BACKEND_TEST_DATABASE_MODE=available and BACKEND_TEST_DATABASE_NAME to run database integration tests',
+}, async () => {
+  const slug = `integration-unique-${randomUUID()}`;
+  let blogId: string | undefined;
+
+  try {
+    const inserted = await db.query<{ id: string }>(
+      `INSERT INTO blog_posts (title, slug, content) VALUES ($1, $2, $3) RETURNING id`,
+      ['Unique constraint test', slug, 'Temporary database integration fixture.'],
+    );
+    blogId = inserted.rows[0]!.id;
+
+    await assert.rejects(
+      db.query(`INSERT INTO blog_posts (title, slug, content) VALUES ($1, $2, $3)`,
+        ['Duplicate slug test', slug, 'This insert must fail.']),
+      (error: unknown) => !!error && typeof error === 'object' && 'code' in error && error.code === '23505',
+    );
+
+    const persisted = await db.query<{ id: string; title: string; count: string }>(
+      `SELECT id, title, (SELECT count(*)::text FROM blog_posts WHERE slug = $1) AS count
+       FROM blog_posts WHERE id = $2`,
+      [slug, blogId],
+    );
+    assert.equal(persisted.rows.length, 1);
+    assert.equal(persisted.rows[0]?.count, '1');
+    assert.equal(persisted.rows[0]?.title, 'Unique constraint test');
+  } finally {
+    if (blogId) await db.query('DELETE FROM blog_posts WHERE id = $1', [blogId]);
   }
 });
 
