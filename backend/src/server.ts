@@ -82,19 +82,6 @@ app.use(helmet({
     },
   },
 }));
-app.use((req, res, next) => {
-  const requestStartedAt = process.hrtime.bigint();
-  res.once('finish', () => {
-    const responseTimeMs = Number(process.hrtime.bigint() - requestStartedAt) / 1_000_000;
-    logger.info('http_request', {
-      method: req.method,
-      path: req.path,
-      status: res.statusCode,
-      responseTimeMs: Number(responseTimeMs.toFixed(3)),
-    });
-  });
-  next();
-});
 const standardJsonParser = express.json({
   limit: '1mb',
   verify: (req, _res, buffer) => {

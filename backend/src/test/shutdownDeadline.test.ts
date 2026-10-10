@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createServer, get, type AddressInfo } from 'node:http';
+import { createServer, get } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { scheduleShutdownDeadline } from '../services/shutdownDeadline.js';
 
 test('shutdown deadline closes active connections and invokes the timeout handler', async () => {

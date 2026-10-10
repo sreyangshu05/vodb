@@ -19,7 +19,9 @@ export function requestIdMiddleware(req: Request, res: Response, next: NextFunct
     logger.info('request_completed', {
       requestId,
       method: req.method,
-      route: metricRequest.key,
+      // Use the bounded metric route key, which strips query strings and
+      // normalizes known dynamic identifiers. Never log a raw URL or query.
+      route: metricRequest.key.slice(0, 300),
       status: res.statusCode,
       durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
     });

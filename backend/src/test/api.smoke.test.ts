@@ -79,6 +79,21 @@ test('GET /api/v1/health replaces invalid client request IDs', async () => {
   assert.match(res.headers['x-request-id'], /^[0-9a-f-]{36}$/i);
 });
 
+test('request completion logs use route templates and omit user-controlled path values', async (context) => {
+  context.mock.method(db, 'logApiError', async () => undefined);
+  const info = context.mock.method(console, 'info', () => undefined);
+  const privatePathValue = 'private-reader-alice@example.com';
+
+  const response = await request(app).get(`/api/v1/blogs/slug/${privatePathValue}`);
+  const emitted = JSON.stringify(info.mock.calls.map((call) => call.arguments));
+
+  assert.equal(response.status, 503);
+  assert.match(emitted, /request_completed/);
+  assert.match(emitted, /\/api\/v1\/blogs\/slug\/:slug/);
+  assert.match(emitted, new RegExp(response.headers['x-request-id']));
+  assert.equal(emitted.includes(privatePathValue), false);
+});
+
 test('unknown routes return a stable not-found response', async () => {
   const res = await request(app).get('/api/v1/route-that-does-not-exist');
 
