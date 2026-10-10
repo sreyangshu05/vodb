@@ -37,6 +37,24 @@ function Get-DirectDatabaseUrl {
   throw 'backend\.env does not contain DIRECT_DATABASE_URL or DATABASE_URL_UNPOOLED.'
 }
 
+function Get-BackendEnvironmentSetting([string]$Name) {
+  $environmentValue = [Environment]::GetEnvironmentVariable($Name, 'Process')
+  if ($environmentValue) {
+    return $environmentValue.Trim()
+  }
+
+  $envFile = Join-Path $PSScriptRoot '..\.env'
+  if (Test-Path -LiteralPath $envFile) {
+    foreach ($line in Get-Content -LiteralPath $envFile) {
+      if ($line -match ('^\s*' + [Regex]::Escape($Name) + '\s*=\s*(.*?)\s*$')) {
+        return $Matches[1].Trim().Trim([char[]]@([char]34, [char]39))
+      }
+    }
+  }
+
+  return ''
+}
+
 function Set-PostgresConnectionEnvironment([string]$ConnectionString) {
   $connectionUri = [Uri]$ConnectionString
   if ($connectionUri.Scheme -notin @('postgres', 'postgresql')) {
@@ -82,6 +100,15 @@ if (-not $pgDump) {
 }
 
 $connectionString = Get-DirectDatabaseUrl
+$connectionUri = [Uri]$connectionString
+$normalisedHost = $connectionUri.DnsSafeHost.ToLowerInvariant()
+$isLocalDatabase = $normalisedHost -in @('localhost', '127.0.0.1', '::1') -or $normalisedHost.EndsWith('.localhost')
+$runtimeEnvironment = Get-BackendEnvironmentSetting 'NODE_ENV'
+$allowRemoteDevelopment = Get-BackendEnvironmentSetting 'ALLOW_REMOTE_DEVELOPMENT_SERVICES'
+if (-not $isLocalDatabase -and $runtimeEnvironment -ne 'production' -and $allowRemoteDevelopment -ne 'true') {
+  throw 'Remote database backups require NODE_ENV=production or explicit ALLOW_REMOTE_DEVELOPMENT_SERVICES=true after verifying the target is non-production.'
+}
+
 $postgresEnvironmentNames = @('PGHOST', 'PGPORT', 'PGUSER', 'PGPASSWORD', 'PGDATABASE', 'PGSSLMODE', 'PGCHANNELBINDING')
 $previousPostgresEnvironment = @{}
 foreach ($name in $postgresEnvironmentNames) {

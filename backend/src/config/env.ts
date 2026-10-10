@@ -33,6 +33,7 @@ const booleanFromEnv = z.preprocess((value) => {
 const envSchema = z.object({
   PORT: z.coerce.number().default(4000),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  ALLOW_REMOTE_DEVELOPMENT_SERVICES: booleanFromEnv.default(false),
   JWT_SECRET: z.string().min(16).default('development-secret-change-me'),
   OTP_HASH_SECRET: z.string().min(32).default('development-otp-hmac-secret-change-me'),
   JWT_EXPIRES_IN: z.string().default('1h'),
@@ -61,7 +62,8 @@ const envSchema = z.object({
   NEON_AI_GATEWAY_MODEL: z.string().trim().min(1).optional(),
   ADMIN_EMAIL: z.string().default('admin@voiceofdigi.org'),
   ADMIN_EMAILS: z.string().default(''),
-  ADMIN_PASSWORD: z.string().default('admin123'),
+  // Plaintext fallback exists only for local development and automated tests.
+  ADMIN_PASSWORD: z.string().optional(),
   ADMIN_PASSWORD_HASH: z.string().optional(),
   ADMIN_LOGIN_RATE_LIMIT_WINDOW_MS: z.coerce.number().default(60000),
   ADMIN_LOGIN_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().default(5),
@@ -82,7 +84,34 @@ const envSchema = z.object({
 
 export const env = envSchema.parse(process.env);
 
+function isLocalServiceHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  return ['localhost', '127.0.0.1', '::1'].includes(normalized) || normalized.endsWith('.localhost');
+}
+
+if (env.NODE_ENV !== 'production' && !env.ALLOW_REMOTE_DEVELOPMENT_SERVICES) {
+  const remoteSettings: string[] = [];
+  for (const [name, connectionString] of [
+    ['DATABASE_URL', env.DATABASE_URL],
+    ['DIRECT_DATABASE_URL', process.env.DIRECT_DATABASE_URL],
+  ] as const) {
+    if (connectionString && !isLocalServiceHost(new URL(connectionString).hostname)) remoteSettings.push(name);
+  }
+  if (!env.DATABASE_URL && !process.env.DIRECT_DATABASE_URL && !isLocalServiceHost(env.POSTGRES_HOST)) {
+    remoteSettings.push('POSTGRES_HOST');
+  }
+  if (env.SMTP_HOST && !isLocalServiceHost(env.SMTP_HOST)) remoteSettings.push('SMTP_HOST');
+
+  if (remoteSettings.length > 0) {
+    throw new Error(`Remote services are disabled outside production (${remoteSettings.join(', ')}). Set ALLOW_REMOTE_DEVELOPMENT_SERVICES=true only after verifying these are non-production resources.`);
+  }
+}
+
 if (env.NODE_ENV === 'production') {
+  if (env.ADMIN_PASSWORD !== undefined) {
+    throw new Error('ADMIN_PASSWORD must not be configured in production; use ADMIN_PASSWORD_HASH.');
+  }
+
   const unsafeDefaults = [
     ...(!env.DATABASE_URL ? [['POSTGRES_PASSWORD', env.POSTGRES_PASSWORD, 'postgres'] as const] : []),
   ] as const;

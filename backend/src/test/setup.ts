@@ -8,6 +8,9 @@ if (databaseMode === 'unavailable') {
   process.env.POSTGRES_PORT = '59999';
   delete process.env.DATABASE_URL;
   delete process.env.DIRECT_DATABASE_URL;
+  // Do not let dotenv repopulate external mail-provider settings from the
+  // developer's local .env during tests that are configured to use no services.
+  process.env.SMTP_HOST = '';
   delete process.env.ADMIN_PASSWORD_HASH;
   process.env.ADMIN_EMAIL = 'admin@voiceofdigi.org';
   process.env.ADMIN_EMAILS = '';
