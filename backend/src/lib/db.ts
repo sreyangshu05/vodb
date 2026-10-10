@@ -36,7 +36,7 @@ const pool = new Pool({
         password: env.POSTGRES_PASSWORD,
         ssl: env.POSTGRES_SSL ? { rejectUnauthorized: env.NODE_ENV === 'production' } : false,
       }),
-  max: 20,
+  max: env.DATABASE_POOL_MAX,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000,
   statement_timeout: env.DATABASE_STATEMENT_TIMEOUT_MS,
@@ -136,7 +136,7 @@ export const db = {
   },
   poolStats() {
     return {
-      max: 20,
+      max: env.DATABASE_POOL_MAX,
       total: pool.totalCount,
       idle: pool.idleCount,
       waiting: pool.waitingCount,

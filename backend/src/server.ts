@@ -17,6 +17,7 @@ import { metrics } from './services/metricsService.js';
 import { apiErrorLogMiddleware } from './middleware/apiErrorLog.js';
 import { getHealthStatus } from './services/healthService.js';
 import { getTrustedProxyHops } from './middleware/proxyTrust.js';
+import { scheduleShutdownDeadline } from './services/shutdownDeadline.js';
 
 const app = express();
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
@@ -181,6 +182,10 @@ if (process.env.NODE_ENV !== 'test' && isMain) {
     if (shutdownPromise) return shutdownPromise;
 
     shutdownPromise = (async () => {
+      const cancelShutdownDeadline = scheduleShutdownDeadline(server, env.SHUTDOWN_TIMEOUT_MS, () => {
+        logger.error('backend_shutdown_timeout', { signal, timeoutMs: env.SHUTDOWN_TIMEOUT_MS });
+        process.exit(1);
+      });
       metrics.markStopping();
       metrics.closeStreams();
       logger.info('backend_shutdown_requested', { signal });
@@ -192,8 +197,10 @@ if (process.env.NODE_ENV !== 'test' && isMain) {
           resolve();
         });
       });
-      await waitForAuditWrites();
+      const auditWritesDrained = await waitForAuditWrites();
+      if (!auditWritesDrained) logger.error('backend_shutdown_audit_drain_timeout', { signal });
       await db.end();
+      cancelShutdownDeadline();
       logger.info('backend_shutdown_complete', { signal });
       process.exit(0);
     })();

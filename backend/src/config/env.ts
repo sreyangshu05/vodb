@@ -45,6 +45,8 @@ const envSchema = z.object({
   POSTGRES_PASSWORD: z.string().default('postgres'),
   POSTGRES_SSL: booleanFromEnv.default(false),
   DATABASE_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(100).max(120000).default(15000),
+  DATABASE_POOL_MAX: z.preprocess((value) => value === '' ? undefined : value, z.coerce.number().int().min(1).max(100)).default(10),
+  SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(20000),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().default(60000),
   RATE_LIMIT_MAX_REQUESTS: z.coerce.number().default(60),
   CONTACT_RATE_LIMIT_WINDOW_MS: z.coerce.number().default(60000),
@@ -55,7 +57,7 @@ const envSchema = z.object({
   NEWSLETTER_WEBHOOK_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60000),
   NEWSLETTER_WEBHOOK_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(300),
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
-  FRONTEND_URL: z.string().url().default('http://localhost:5173'),
+  FRONTEND_URL: z.preprocess((value) => value === '' ? undefined : value, z.string().url().optional()),
   OBSERVABILITY_TOKEN: z.preprocess((value) => value === '' ? undefined : value, z.string().min(16).optional()),
   NEON_AI_GATEWAY_BASE_URL: z.preprocess((value) => value === '' ? undefined : value, z.string().url().optional()),
   NEON_AI_GATEWAY_TOKEN: z.preprocess((value) => value === '' ? undefined : value, z.string().min(16).optional()),
@@ -63,7 +65,7 @@ const envSchema = z.object({
   ADMIN_EMAIL: z.string().default('admin@voiceofdigi.org'),
   ADMIN_EMAILS: z.string().default(''),
   // Plaintext fallback exists only for local development and automated tests.
-  ADMIN_PASSWORD: z.string().optional(),
+  ADMIN_PASSWORD: z.preprocess((value) => value === '' ? undefined : value, z.string().optional()),
   ADMIN_PASSWORD_HASH: z.string().optional(),
   ADMIN_LOGIN_RATE_LIMIT_WINDOW_MS: z.coerce.number().default(60000),
   ADMIN_LOGIN_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().default(5),
@@ -82,7 +84,11 @@ const envSchema = z.object({
   MEDIA_TOKEN_TTL_SECONDS: z.coerce.number().int().min(30).max(3600).default(300),
 });
 
-export const env = envSchema.parse(process.env);
+const parsedEnv = envSchema.parse(process.env);
+export const env = {
+  ...parsedEnv,
+  FRONTEND_URL: parsedEnv.FRONTEND_URL ?? 'http://localhost:5173',
+};
 
 function isLocalServiceHost(hostname: string): boolean {
   const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, '');
@@ -175,6 +181,19 @@ if (env.NODE_ENV === 'production') {
 
   if (env.NEON_AI_GATEWAY_BASE_URL && !env.NEON_AI_GATEWAY_BASE_URL.startsWith('https://')) {
     throw new Error('NEON_AI_GATEWAY_BASE_URL must use HTTPS in production.');
+  }
+
+  const productionFrontendUrl = new URL(env.FRONTEND_URL);
+  if (
+    productionFrontendUrl.protocol !== 'https:' ||
+    isLocalServiceHost(productionFrontendUrl.hostname) ||
+    productionFrontendUrl.username ||
+    productionFrontendUrl.password ||
+    productionFrontendUrl.pathname !== '/' ||
+    productionFrontendUrl.search ||
+    productionFrontendUrl.hash
+  ) {
+    throw new Error('FRONTEND_URL must be a public HTTPS origin in production.');
   }
 
   const configuredOrigins = env.CORS_ORIGIN.split(',').map((origin) => origin.trim().replace(/\/$/, '')).filter(Boolean);

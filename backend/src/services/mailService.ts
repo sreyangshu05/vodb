@@ -48,8 +48,9 @@ export async function sendNewsletterConfirmation(email: string, confirmationToke
     throw new AppError(503, 'email_delivery_unavailable', 'Newsletter email delivery is temporarily unavailable.');
   }
 
-  const confirmationUrl = `${env.FRONTEND_URL}/newsletter/confirm?token=${encodeURIComponent(confirmationToken)}`;
-  const unsubscribeUrl = `${env.FRONTEND_URL}/newsletter/unsubscribe?token=${encodeURIComponent(unsubscribeToken)}`;
+  const frontendUrl = env.FRONTEND_URL.replace(/\/+$/, '');
+  const confirmationUrl = `${frontendUrl}/newsletter/confirm?token=${encodeURIComponent(confirmationToken)}`;
+  const unsubscribeUrl = `${frontendUrl}/newsletter/unsubscribe?token=${encodeURIComponent(unsubscribeToken)}`;
   try {
     await transporter.sendMail({
       from: env.SMTP_FROM,

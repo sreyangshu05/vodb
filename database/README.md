@@ -127,7 +127,7 @@ The implementation follows the design documents in `frontend/docs/database` and 
 
 The repository policy is to retain audit events for seven years, protected-media access records for 90 days, and API error logs for 30 days. An audit record with `legal_hold = TRUE` is excluded from automated cleanup. Confirm these periods meet applicable legal and organizational requirements before production use.
 
-Retention cleanup is an explicit, free, operator-run PostgreSQL maintenance task; the repository does not require a paid scheduler or provider. It defaults to a read-only dry run and processes deletions in batches of 1,000 (maximum 10,000 per batch):
+Retention cleanup is an explicit PostgreSQL maintenance task; no paid scheduler or provider dependency is required. It defaults to a read-only dry run and processes deletions in batches of 1,000 (maximum 10,000 per batch):
 
 ```powershell
 npm.cmd --prefix backend run db:retention
@@ -136,6 +136,8 @@ npm.cmd --prefix backend run db:retention -- --apply --batch-size=500
 ```
 
 Use a direct database connection. Review dry-run counts and take/verify a backup before applying. The task uses `FOR UPDATE SKIP LOCKED`, so concurrent maintenance workers do not claim the same rows. It is safe to rerun. Record the run time and deleted counts; test the procedure and restore path in a nonproduction database first.
+
+No production scheduler is configured in source control. If automating this task, use an already available, always-on operator-controlled host and its native scheduler (for example, cron/systemd timer or Windows Task Scheduler); do not put production database credentials in general CI or a preview job. Run a dry run first, confirm backup/restore, then schedule the bounded `--apply --batch-size=1000` command and retain its logs. If there is no approved always-on host, keep execution manual and track retention as an outstanding operational control.
 
 ## Query-plan review
 
