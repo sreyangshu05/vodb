@@ -16,10 +16,11 @@ import observabilityRouter from './routes/observability.js';
 import { metrics } from './services/metricsService.js';
 import { apiErrorLogMiddleware } from './middleware/apiErrorLog.js';
 import { getHealthStatus } from './services/healthService.js';
+import { getTrustedProxyHops } from './middleware/proxyTrust.js';
 
 const app = express();
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
-app.set('trust proxy', 1);
+app.set('trust proxy', getTrustedProxyHops());
 app.use(requestIdMiddleware);
 app.use(apiErrorLogMiddleware);
 app.use('/api/v1', (_req, res, next) => {

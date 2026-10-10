@@ -1,6 +1,7 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
+import express from 'express';
 import request from 'supertest';
 import app from '../server.js';
 import { db } from '../lib/db.js';
@@ -9,8 +10,41 @@ import { env } from '../config/env.js';
 import { createPasswordReset, signToken } from '../services/authService.js';
 import { createMediaAccess, resolveMediaToken } from '../services/mediaService.js';
 import { createNewsletterSubscription, processNewsletterDeliveryEvent } from '../services/submissionService.js';
+import { createRateLimiter } from '../middleware/rateLimit.js';
 
 const integrationEnabled = process.env.BACKEND_TEST_DATABASE_MODE === 'available';
+
+test('shared PostgreSQL rate limits remain atomic under concurrent requests', {
+  skip: integrationEnabled ? false : 'set BACKEND_TEST_DATABASE_MODE=available to run database integration tests',
+}, async () => {
+  const prefix = `rate-limit-integration-${randomUUID()}`;
+  const bucketKeyForIp = (ip: string) => createHmac('sha256', env.JWT_SECRET)
+    .update(`${prefix}:ip:${ip}`)
+    .digest('hex');
+  const appForLimit = express();
+  appForLimit.set('trust proxy', false);
+  appForLimit.get('/limited', createRateLimiter({
+    windowMs: 60_000,
+    max: 4,
+    shared: true,
+    keyPrefix: prefix,
+  }), (req, res) => res.json({ ok: true, ip: req.ip }));
+
+  let bucketKey: string | undefined;
+  try {
+    const warmup = await request(appForLimit).get('/limited');
+    assert.equal(warmup.status, 200);
+    assert.ok(warmup.body.ip);
+    bucketKey = bucketKeyForIp(warmup.body.ip as string);
+    const responses = await Promise.all(Array.from({ length: 19 }, () => request(appForLimit).get('/limited')));
+    assert.equal(responses.filter((response) => response.status === 200).length, 3);
+    assert.equal(responses.filter((response) => response.status === 429).length, 16);
+    assert.ok(responses.filter((response) => response.status === 429)
+      .every((response) => /^[1-9][0-9]*$/.test(response.headers['retry-after'] ?? '')));
+  } finally {
+    if (bucketKey) await db.query('DELETE FROM rate_limit_buckets WHERE bucket_key = $1', [bucketKey]);
+  }
+});
 
 after(async () => {
   await waitForAuditWrites();

@@ -56,6 +56,13 @@ const newsletterResendLimiter = createRateLimiter({
   identity: (req) => typeof req.body?.email === 'string' ? req.body.email : undefined,
   message: 'Too many confirmation requests. Please wait before trying again.',
 });
+const newsletterTokenActionLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 30,
+  shared: true,
+  keyPrefix: 'newsletter-token-action',
+  message: 'Too many newsletter actions. Please wait before trying again.',
+});
 const newsletterWebhookLimiter = createRateLimiter({
   windowMs: env.NEWSLETTER_WEBHOOK_RATE_LIMIT_WINDOW_MS,
   max: env.NEWSLETTER_WEBHOOK_RATE_LIMIT_MAX_REQUESTS,
@@ -211,7 +218,7 @@ router.post('/newsletter/resend-confirmation', newsletterResendLimiter, async (r
   }
 });
 
-router.post('/newsletter/confirm', async (req, res, next) => {
+router.post('/newsletter/confirm', newsletterTokenActionLimiter, async (req, res, next) => {
   try {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Referrer-Policy', 'no-referrer');
@@ -224,7 +231,7 @@ router.post('/newsletter/confirm', async (req, res, next) => {
   }
 });
 
-router.post('/newsletter/unsubscribe', async (req, res, next) => {
+router.post('/newsletter/unsubscribe', newsletterTokenActionLimiter, async (req, res, next) => {
   try {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Referrer-Policy', 'no-referrer');

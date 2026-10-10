@@ -5,6 +5,7 @@ import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { createMediaAccess, resolveMediaToken } from '../services/mediaService.js';
 import { AppError } from '../utils/errors.js';
 import { db } from '../lib/db.js';
+import { createRateLimiter } from '../middleware/rateLimit.js';
 import sharp from 'sharp';
 
 const router = Router();
@@ -12,6 +13,38 @@ const mediaId = z.string().uuid();
 const maxImageBytes = 5 * 1024 * 1024;
 const maxImagePixels = 25_000_000;
 const uploadJsonParser = json({ limit: '7mb' });
+const mediaUploadIpLimiter = createRateLimiter({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  shared: false,
+  keyPrefix: 'media-upload-ip',
+  message: 'Too many image upload attempts. Please try again later.',
+});
+const mediaUploadLimiter = createRateLimiter({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  identityMax: 20,
+  shared: true,
+  keyPrefix: 'media-upload',
+  identity: (req) => req.user?.id,
+  message: 'Too many image uploads. Please try again later.',
+});
+const mediaReadLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 120,
+  shared: false,
+  keyPrefix: 'public-media-read',
+  message: 'Too many media requests. Please slow down and retry later.',
+});
+const protectedMediaAccessLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 60,
+  identityMax: 60,
+  shared: true,
+  keyPrefix: 'protected-media-access',
+  identity: (req) => req.user?.id,
+  message: 'Too many protected media requests. Please wait before trying again.',
+});
 
 function sendPublicImage(req: Request, res: Response, image: {
   id: string;
@@ -57,7 +90,7 @@ function hasCacheValidators(req: Request): boolean {
   return Boolean(req.get('if-none-match') || req.get('if-modified-since'));
 }
 
-router.post('/upload', requireAuth, requireAdmin, uploadJsonParser, async (req, res, next) => {
+router.post('/upload', mediaUploadIpLimiter, requireAuth, requireAdmin, mediaUploadLimiter, uploadJsonParser, async (req, res, next) => {
   try {
     const { data, mimeType, fileName, altText } = req.body ?? {};
     if (typeof data !== 'string' || data.length > Math.ceil(maxImageBytes * 4 / 3) + 16) {
@@ -106,7 +139,7 @@ router.post('/upload', requireAuth, requireAdmin, uploadJsonParser, async (req, 
   } catch (error) { next(error); }
 });
 
-router.get('/source', async (req, res, next) => {
+router.get('/source', mediaReadLimiter, async (req, res, next) => {
   try {
     const sourcePath = z.string().trim().min(1).max(500).parse(req.query.path);
     if (hasCacheValidators(req)) {
@@ -135,7 +168,7 @@ router.get('/source', async (req, res, next) => {
   }
 });
 
-router.get('/stream', async (req, res, next) => {
+router.get('/stream', mediaReadLimiter, async (req, res, next) => {
   try {
     const token = req.get('x-media-access-token');
     if (!token) throw new AppError(401, 'missing_media_token', 'A media access token is required.');
@@ -147,7 +180,7 @@ router.get('/stream', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-router.get('/:id', async (req, res, next) => {
+router.get('/:id', mediaReadLimiter, async (req, res, next) => {
   try {
     const parsed = mediaId.safeParse(req.params.id);
     if (!parsed.success) throw new AppError(400, 'invalid_media_id', 'Media id must be a UUID.');
@@ -182,7 +215,7 @@ router.get('/:id', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-router.post('/:id/access', requireAuth, async (req, res, next) => {
+router.post('/:id/access', requireAuth, protectedMediaAccessLimiter, async (req, res, next) => {
   try {
     const parsed = mediaId.safeParse(req.params.id);
     if (!parsed.success) throw new AppError(400, 'invalid_media_id', 'Media id must be a UUID.');

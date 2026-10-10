@@ -23,6 +23,22 @@ const loginLimiter = createRateLimiter({
   identity: (req) => typeof req.body?.email === 'string' ? req.body.email : undefined,
   message: 'Too many admin login attempts. Please retry later.',
 });
+const adminIpLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 120,
+  shared: false,
+  keyPrefix: 'admin-api-ip',
+  message: 'Too many administrative requests. Please wait before trying again.',
+});
+const adminApiLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 300,
+  identityMax: 300,
+  shared: true,
+  keyPrefix: 'admin-api',
+  identity: (req) => req.user?.id,
+  message: 'Too many administrative requests. Please wait before trying again.',
+});
 const paginationSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().min(0).max(1000000).default(0),
@@ -43,7 +59,15 @@ const editorialAssistSchema = z.object({
   content: z.string().trim().min(1).max(12000),
   imageDescription: z.string().trim().max(1000).optional(),
 });
-const editorialAssistLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 10, shared: true, keyPrefix: 'editorial-assist', message: 'Too many AI assistance requests. Please wait before trying again.' });
+const editorialAssistLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  identityMax: 10,
+  shared: true,
+  keyPrefix: 'editorial-assist',
+  identity: (req) => req.user?.id,
+  message: 'Too many AI assistance requests. Please wait before trying again.',
+});
 const contentReviewWindowSchema = z.object({ days: z.coerce.number().int().min(30).max(3650).default(180) });
 
 async function databaseSnapshot() {
@@ -104,7 +128,7 @@ router.post('/login', loginLimiter, async (req, res, next) => {
   }
 });
 
-router.use(requireAuth, requireAdmin);
+router.use(adminIpLimiter, requireAuth, requireAdmin, adminApiLimiter);
 
 router.post('/ai/editorial-suggestions', editorialAssistLimiter, async (req, res, next) => {
   try {
