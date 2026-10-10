@@ -33,3 +33,24 @@ test('PostgreSQL statement timeouts return a safe temporary-failure response', a
   });
   assert.equal(JSON.stringify(response.body).includes('private SQL text'), false);
 });
+
+test('production unexpected-error logs omit exception messages and stack traces', async (t) => {
+  const originalNodeEnv = process.env.NODE_ENV;
+  const logged: string[] = [];
+  process.env.NODE_ENV = 'production';
+  t.mock.method(console, 'error', (...args: unknown[]) => logged.push(args.join(' ')));
+  try {
+    const app = express();
+    app.get('/unexpected', (_req, _res, next) => next(new Error('password=secret-value private customer data')));
+    app.use(errorHandler);
+    const response = await request(app).get('/unexpected');
+    assert.equal(response.status, 500);
+    assert.equal(JSON.stringify(response.body).includes('secret-value'), false);
+    assert.equal(logged.length, 1);
+    assert.equal(logged[0]!.includes('secret-value'), false);
+    assert.equal(logged[0]!.includes('private customer data'), false);
+  } finally {
+    if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = originalNodeEnv;
+  }
+});

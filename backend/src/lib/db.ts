@@ -66,7 +66,10 @@ async function flushPendingApiErrorLogs() {
     if (!errorLogPersistenceWarningWritten) {
       logger.warn('api_error_log_persist_deferred', {
         pendingCount: pendingApiErrorLogs.length,
-        message: error instanceof Error ? error.message : 'Unable to persist API error logs.',
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+        ...(error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+          ? { code: error.code.slice(0, 32) }
+          : {}),
       });
       errorLogPersistenceWarningWritten = true;
     }

@@ -13,20 +13,15 @@ export function validateStorageUrl(storageUrl: string): string {
       throw new Error('Unsupported storage URL.');
     }
     const hostname = parsed.hostname.toLowerCase();
-    const ipHostname = hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
     if (!hostname || hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local')) {
       throw new Error('Storage URL must use a public host.');
     }
-    if (isIP(ipHostname) === 4) {
-      const [a, b] = ipHostname.split('.').map(Number);
-      if (a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b! >= 16 && b! <= 31) || (a === 192 && b === 168) || a! >= 224) {
-        throw new Error('Storage URL must use a public host.');
-      }
-    } else if (isIP(ipHostname) === 6) {
-      const normalized = ipHostname;
-      if (normalized === '::' || normalized === '::1' || normalized.startsWith('fc') || normalized.startsWith('fd') || /^fe[89ab]/.test(normalized)) {
-        throw new Error('Storage URL must use a public host.');
-      }
+    // Redirect targets are administrator-managed, but accepting IP literals
+    // creates an avoidable path to loopback, private, link-local, mapped IPv4,
+    // and special-use destinations. Require a DNS hostname for storage URLs.
+    const ipHostname = hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
+    if (isIP(ipHostname) !== 0) {
+      throw new Error('Storage URL must use a public DNS host.');
     }
     return parsed.toString();
   } catch {

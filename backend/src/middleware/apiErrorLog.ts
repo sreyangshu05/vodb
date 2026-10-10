@@ -1,7 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import { db } from '../lib/db.js';
 
-function messageFromBody(body: unknown, statusCode: number, statusMessage: string): string {
+export function safeErrorCodeFromBody(body: unknown): string | undefined {
   let payload = body;
   if (typeof payload === 'string') {
     try {
@@ -13,11 +13,9 @@ function messageFromBody(body: unknown, statusCode: number, statusMessage: strin
 
   if (payload && typeof payload === 'object') {
     const record = payload as Record<string, unknown>;
-    if (typeof record.message === 'string' && record.message.trim()) return record.message.trim().slice(0, 4000);
-    if (typeof record.error === 'string' && record.error.trim()) return record.error.trim().slice(0, 4000);
+    if (typeof record.error === 'string' && /^[a-z0-9_]{1,80}$/i.test(record.error)) return record.error;
   }
-
-  return `${statusCode} ${statusMessage || 'Request failed'}`.slice(0, 4000);
+  return undefined;
 }
 
 export function apiErrorLogMiddleware(req: Request, res: Response, next: NextFunction) {
@@ -25,7 +23,7 @@ export function apiErrorLogMiddleware(req: Request, res: Response, next: NextFun
 
   res.json = ((body: unknown) => {
     if (res.statusCode >= 400) {
-      res.locals.apiErrorMessage = messageFromBody(body, res.statusCode, res.statusMessage);
+      res.locals.apiErrorCode = safeErrorCodeFromBody(body);
     }
     return originalJson(body as never);
   }) as typeof res.json;
@@ -33,10 +31,14 @@ export function apiErrorLogMiddleware(req: Request, res: Response, next: NextFun
   res.on('finish', () => {
     if (res.statusCode < 400) return;
 
-    const endpoint = `${req.method} ${req.originalUrl.split('?', 1)[0]}`.slice(0, 500);
-    const errorMessage = typeof res.locals.apiErrorMessage === 'string'
-      ? res.locals.apiErrorMessage
-      : `${res.statusCode} ${res.statusMessage || 'Request failed'}`;
+    const routePath = req.route?.path;
+    const endpointPath = typeof routePath === 'string'
+      ? `${req.baseUrl}${routePath}`
+      : req.path;
+    const endpoint = `${req.method} ${endpointPath}`.slice(0, 500);
+    const errorMessage = typeof res.locals.apiErrorCode === 'string'
+      ? res.locals.apiErrorCode
+      : `http_${res.statusCode}`;
 
     void db.logApiError({ endpoint, errorMessage, userId: req.user?.id });
   });

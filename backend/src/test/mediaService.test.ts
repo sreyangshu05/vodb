@@ -11,7 +11,13 @@ test('protected media storage URLs require public HTTP(S) destinations', () => {
     'http://127.0.0.1/private',
     'http://10.0.0.5/private',
     'http://192.168.1.10/private',
+    'http://100.64.0.1/private',
+    'http://192.0.2.1/private',
+    'http://198.18.0.1/private',
+    'http://203.0.113.10/private',
     'http://[::1]/private',
+    'http://[::ffff:127.0.0.1]/private',
+    'http://[::ffff:10.0.0.1]/private',
   ]) {
     assert.throws(
       () => validateStorageUrl(url),

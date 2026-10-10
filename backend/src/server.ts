@@ -168,7 +168,7 @@ if (process.env.NODE_ENV !== 'test' && isMain) {
         message: `Port ${port} is already in use. Stop the other server or choose another PORT.`,
       });
     } else {
-      logger.error('backend_start_failed', { port, code: error.code, message: error.message });
+      logger.error('backend_start_failed', { port, code: error.code });
     }
     process.exit(1);
   });
@@ -186,7 +186,7 @@ if (process.env.NODE_ENV !== 'test' && isMain) {
       await new Promise<void>((resolve) => {
         server.close((error) => {
           if (error && (error as NodeJS.ErrnoException).code !== 'ERR_SERVER_NOT_RUNNING') {
-            logger.error('backend_http_shutdown_failed', { message: error.message });
+            logger.error('backend_http_shutdown_failed', { errorName: error.name });
           }
           resolve();
         });

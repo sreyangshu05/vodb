@@ -35,7 +35,12 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
   };
 
   if (err instanceof AppError) {
-    logger.warn('app_error', { ...requestContext, error: err.error, message: err.message, status: err.status });
+    logger.warn('app_error', {
+      ...requestContext,
+      error: err.error,
+      ...(process.env.NODE_ENV === 'production' ? {} : { message: err.message }),
+      status: err.status,
+    });
     return res.status(err.status).json(err.toResponse());
   }
 
@@ -92,7 +97,7 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     logger.error('database_schema_unavailable', {
       ...requestContext,
       code,
-      message: err instanceof Error ? err.message : 'Required database schema is missing',
+      ...safeErrorMetadata(err),
     });
     return res.status(503).json({
       error: 'database_schema_unavailable',
@@ -101,14 +106,22 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
   }
 
   if (err instanceof Error) {
-    logger.error('unhandled_error', { ...requestContext, message: err.message, stack: err.stack });
+    const diagnostics = process.env.NODE_ENV === 'production'
+      ? safeErrorMetadata(err)
+      : { ...safeErrorMetadata(err), message: err.message, stack: err.stack };
+    logger.error('unhandled_error', { ...requestContext, ...diagnostics });
     return res.status(500).json({
       error: 'internal_server_error',
       message: 'An unexpected server error occurred.',
     });
   }
 
-  logger.error('unknown_error', { ...requestContext, payload: err });
+  logger.error('unknown_error', {
+    ...requestContext,
+    ...(process.env.NODE_ENV === 'production'
+      ? safeErrorMetadata(err)
+      : { payload: err }),
+  });
   return res.status(500).json({
     error: 'internal_server_error',
     message: 'An unexpected server error occurred.',

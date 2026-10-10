@@ -199,7 +199,9 @@ test('protected media requires explicit sharing when it has no owner', {
   skip: integrationEnabled ? false : 'set BACKEND_TEST_DATABASE_MODE=available to run database integration tests',
 }, async () => {
   const email = `protected-media-${Date.now()}@example.com`;
+  const otherEmail = `protected-media-other-${Date.now()}@example.com`;
   let userId: string | undefined;
+  let otherUserId: string | undefined;
   let mediaId: string | undefined;
 
   try {
@@ -210,6 +212,13 @@ test('protected media requires explicit sharing when it has no owner', {
       [email],
     );
     userId = userResult.rows[0]!.id;
+    const otherUserResult = await db.query<{ id: string }>(
+      `INSERT INTO users (name, email, password_hash, email_verified)
+       VALUES ('Other Protected Media Test', $1, 'test-hash', TRUE)
+       RETURNING id`,
+      [otherEmail],
+    );
+    otherUserId = otherUserResult.rows[0]!.id;
     const mediaResult = await db.query<{ id: string }>(
       `INSERT INTO protected_media (title, storage_url, mime_type, owner_user_id)
        VALUES ('Protected Media Test', 'https://example.com/protected.png', 'image/png', NULL)
@@ -219,6 +228,10 @@ test('protected media requires explicit sharing when it has no owner', {
 
     await assert.rejects(
       createMediaAccess(mediaId, userId, {}),
+      (error: unknown) => error instanceof Error && 'error' in error && error.error === 'media_not_found',
+    );
+    await assert.rejects(
+      createMediaAccess(mediaId, otherUserId, {}),
       (error: unknown) => error instanceof Error && 'error' in error && error.error === 'media_not_found',
     );
 
@@ -240,6 +253,7 @@ test('protected media requires explicit sharing when it has no owner', {
     );
   } finally {
     if (mediaId) await db.query('DELETE FROM protected_media WHERE id = $1', [mediaId]);
+    if (otherUserId) await db.query('DELETE FROM users WHERE id = $1', [otherUserId]);
     if (userId) await db.query('DELETE FROM users WHERE id = $1', [userId]);
   }
 });

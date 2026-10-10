@@ -51,7 +51,10 @@ export async function recordAuditEvent(event: AuditEventInput): Promise<void> {
             resourceId: event.resourceId,
             attempts: attempt,
             failureCount: auditWriteFailureCount,
-            message: error instanceof Error ? error.message : 'unknown error',
+            errorName: error instanceof Error ? error.name : 'UnknownError',
+            ...(error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+              ? { code: error.code.slice(0, 32) }
+              : {}),
           });
           return;
         }

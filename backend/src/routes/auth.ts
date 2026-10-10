@@ -63,14 +63,11 @@ const authLimiter = createRateLimiter({
   identity: (req) => typeof req.body?.email === 'string' ? req.body.email : undefined,
   message: 'Too many authentication attempts. Please retry later.',
 });
-// Google token verification is an external, stateless step. Keep it available
-// during a database outage so a healthy Google integration does not fail at
-// the shared PostgreSQL rate-limit table before token verification begins.
 const googleAuthLimiter = createRateLimiter({
   windowMs: env.ADMIN_LOGIN_RATE_LIMIT_WINDOW_MS,
   max: env.ADMIN_LOGIN_RATE_LIMIT_MAX_REQUESTS * 6,
   identityMax: env.ADMIN_LOGIN_RATE_LIMIT_MAX_REQUESTS,
-  shared: false,
+  shared: true,
   keyPrefix: 'google-auth',
   identity: (req) => typeof req.body?.email === 'string' ? req.body.email : undefined,
   message: 'Too many authentication attempts. Please retry later.',
