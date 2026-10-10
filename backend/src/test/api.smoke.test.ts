@@ -363,6 +363,36 @@ test('POST /api/v1/contact fails with 503 when the database is unavailable', asy
   assert.equal(res.body.error, 'contact_service_unavailable');
 });
 
+test('shared rate-limit database socket failures return a retryable service error', async (context) => {
+  const previousMode = process.env.BACKEND_TEST_DATABASE_MODE;
+  process.env.BACKEND_TEST_DATABASE_MODE = 'available';
+  context.mock.method(db, 'query', async () => {
+    const error = Object.assign(new AggregateError([], 'database socket access denied'), { code: 'EACCES' });
+    throw error;
+  });
+  context.mock.method(db, 'logApiError', async () => undefined);
+
+  try {
+    const response = await request(app)
+      .post('/api/v1/contact')
+      .send({
+        name: 'Boundary Test',
+        email: 'boundary@example.invalid',
+        subject: 'Database outage path',
+        message: 'This request exercises a database-backed rate limiter failure.',
+      });
+
+    assert.equal(response.status, 503);
+    assert.equal(response.body.error, 'service_unavailable');
+    assert.equal(response.body.message, 'The service is temporarily unavailable. Please try again later.');
+    assert.equal(response.headers['retry-after'], '5');
+    assert.equal(JSON.stringify(response.body).includes('EACCES'), false);
+  } finally {
+    if (previousMode === undefined) delete process.env.BACKEND_TEST_DATABASE_MODE;
+    else process.env.BACKEND_TEST_DATABASE_MODE = previousMode;
+  }
+});
+
 test('GET /api/v1/media/stream requires the token header', async () => {
   const res = await request(app).get('/api/v1/media/stream');
 

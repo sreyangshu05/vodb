@@ -43,7 +43,8 @@ const eventPayloadBaseSchema = z.object({
   allDay: z.boolean().default(false),
   location: z.string().trim().min(1).max(300),
   published: z.boolean().default(false),
-  capacity: z.number().int().nonnegative().nullable().optional(),
+  // PostgreSQL stores capacity in a signed 32-bit INTEGER.
+  capacity: z.number().int().min(0).max(2_147_483_647).nullable().optional(),
   registrationUrl: z.string().url().max(2048).nullable().optional(),
   metaTitle: z.string().trim().max(240).nullable().optional(),
   metaDescription: z.string().trim().max(320).nullable().optional(),

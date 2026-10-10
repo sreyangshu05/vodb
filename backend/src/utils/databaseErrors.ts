@@ -6,6 +6,8 @@ const DATABASE_NETWORK_CODES = new Set([
   'EHOSTUNREACH',
   'ENETUNREACH',
   'EPIPE',
+  // Node can report EACCES when the OS denies a database socket connection.
+  'EACCES',
   'EAI_AGAIN',
   'ENOTFOUND',
 ]);

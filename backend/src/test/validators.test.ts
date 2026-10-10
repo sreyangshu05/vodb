@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { eventPayloadSchema, eventUpdateSchema } from '../lib/validators.js';
+import { contactSchema, eventPayloadSchema, eventUpdateSchema } from '../lib/validators.js';
 
 const validEvent = {
   title: 'Community gathering',
@@ -66,4 +66,40 @@ test('event end cannot precede its start on create or when both values are updat
   assert.equal(eventUpdateSchema.safeParse({
     endsAt: '2026-11-01T09:59:00Z',
   }).success, true);
+});
+
+test('event capacity respects the PostgreSQL signed INTEGER boundary and rejects wrong shapes', () => {
+  assert.equal(eventPayloadSchema.safeParse({ ...validEvent, capacity: 0 }).success, true);
+  assert.equal(eventPayloadSchema.safeParse({ ...validEvent, capacity: 2_147_483_647 }).success, true);
+  assert.equal(eventPayloadSchema.safeParse({ ...validEvent, capacity: 2_147_483_648 }).success, false);
+  assert.equal(eventPayloadSchema.safeParse({ ...validEvent, capacity: -1 }).success, false);
+  assert.equal(eventPayloadSchema.safeParse({ ...validEvent, capacity: 1.5 }).success, false);
+  assert.equal(eventPayloadSchema.safeParse({ ...validEvent, capacity: '10' }).success, false);
+  assert.equal(eventPayloadSchema.safeParse({ ...validEvent, capacity: null }).success, true);
+});
+
+test('contact validation handles empty, null, wrong-type, maximum-length, and Unicode inputs', () => {
+  const base = {
+    name: 'N'.repeat(100),
+    email: 'reader@example.com',
+    subject: 'S'.repeat(200),
+    message: 'M'.repeat(3000),
+  };
+
+  assert.equal(contactSchema.safeParse(base).success, true);
+  assert.equal(contactSchema.safeParse({ ...base, name: '   ' }).success, false);
+  assert.equal(contactSchema.safeParse({ ...base, subject: '' }).success, false);
+  assert.equal(contactSchema.safeParse({ ...base, message: null }).success, false);
+  assert.equal(contactSchema.safeParse({ ...base, email: ['reader@example.com'] }).success, false);
+  assert.equal(contactSchema.safeParse({ ...base, name: 'N'.repeat(101) }).success, false);
+  assert.equal(contactSchema.safeParse({ ...base, subject: 'S'.repeat(201) }).success, false);
+  assert.equal(contactSchema.safeParse({ ...base, message: 'M'.repeat(3001) }).success, false);
+
+  const unicode = contactSchema.safeParse({
+    name: 'আনিরুদ্ধ 🌿',
+    email: 'reader@example.com',
+    subject: 'শুভেচ্ছা 👋',
+    message: 'বাংলা text with emoji 🌊',
+  });
+  assert.equal(unicode.success, true);
 });

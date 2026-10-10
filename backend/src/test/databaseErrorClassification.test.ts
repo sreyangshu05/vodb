@@ -19,7 +19,7 @@ test('classifies network failures but not database authentication failures as tr
 });
 
 test('recognizes all configured database network failure codes', () => {
-  for (const code of ['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH', 'EPIPE', 'EAI_AGAIN', 'ENOTFOUND']) {
+  for (const code of ['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH', 'EPIPE', 'EACCES', 'EAI_AGAIN', 'ENOTFOUND']) {
     assert.equal(isDatabaseUnavailable(Object.assign(new Error('network request failed'), { code })), true, code);
   }
 });

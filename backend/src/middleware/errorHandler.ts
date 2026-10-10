@@ -77,6 +77,7 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
 
   if (isDatabaseUnavailable(err)) {
     logger.error('database_unavailable', { ...requestContext, ...safeErrorMetadata(err) });
+    res.setHeader('Retry-After', '5');
     return res.status(503).json({
       error: 'service_unavailable',
       message: 'The service is temporarily unavailable. Please try again later.',
