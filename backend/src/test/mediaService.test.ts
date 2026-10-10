@@ -26,3 +26,30 @@ test('protected media storage URLs require public HTTP(S) destinations', () => {
     );
   }
 });
+
+test('normalizes valid HTTP(S) storage URLs using the URL parser', () => {
+  assert.equal(validateStorageUrl('HTTPS://CDN.EXAMPLE.COM:443/media/image.webp'), 'https://cdn.example.com/media/image.webp');
+  assert.equal(validateStorageUrl('https://cdn.example.com/a/../media/image.webp'), 'https://cdn.example.com/media/image.webp');
+});
+
+test('rejects malformed URLs, unsupported schemes, and local or literal hosts with a stable public error', () => {
+  for (const url of [
+    '',
+    'not a URL',
+    '//cdn.example.com/media/image.webp',
+    'ftp://cdn.example.com/media/image.webp',
+    'file:///etc/passwd',
+    'https://printer.local/media/image.webp',
+    'https://service.localhost/media/image.webp',
+    'https://[2001:db8::1]/media/image.webp',
+  ]) {
+    assert.throws(
+      () => validateStorageUrl(url),
+      (error: unknown) => error instanceof Error
+        && error.message === 'Protected media storage is temporarily unavailable.'
+        && 'status' in error && error.status === 503
+        && 'error' in error && error.error === 'media_storage_unavailable',
+      `Expected a stable storage error for: ${url}`,
+    );
+  }
+});

@@ -17,3 +17,30 @@ test('classifies network failures but not database authentication failures as tr
   assert.equal(isDatabaseUnavailable(Object.assign(new Error('password authentication failed'), { code: '28P01' })), false);
   assert.equal(isDatabaseConfigurationError(Object.assign(new Error('password authentication failed'), { code: '28P01' })), true);
 });
+
+test('recognizes all configured database network failure codes', () => {
+  for (const code of ['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH', 'EPIPE', 'EAI_AGAIN', 'ENOTFOUND']) {
+    assert.equal(isDatabaseUnavailable(Object.assign(new Error('network request failed'), { code })), true, code);
+  }
+});
+
+test('uses known connection message fallbacks only when no structured code is available', () => {
+  assert.equal(isDatabaseUnavailable(new Error('could not connect to server: connection refused')), true);
+  assert.equal(isDatabaseUnavailable(new Error('connection terminated unexpectedly')), true);
+  assert.equal(isDatabaseUnavailable(new Error('timeout exceeded when trying to connect')), true);
+  assert.equal(isDatabaseUnavailable(Object.assign(new Error('could not connect to server'), { code: '23505' })), false);
+  assert.equal(isDatabaseUnavailable(new Error('syntax error in query')), false);
+  assert.equal(isDatabaseUnavailable('ECONNREFUSED'), false);
+  assert.equal(isDatabaseUnavailable({ code: 503 }), false);
+});
+
+test('classifies only PostgreSQL authentication and missing-database SQLSTATEs as configuration errors', () => {
+  for (const code of ['28P01', '3D000']) {
+    assert.equal(isDatabaseConfigurationError(Object.assign(new Error('configuration failure'), { code })), true);
+  }
+  for (const code of ['08006', '23505', '53300']) {
+    assert.equal(isDatabaseConfigurationError(Object.assign(new Error('other failure'), { code })), false);
+  }
+  assert.equal(isDatabaseConfigurationError(new Error('password authentication failed')), false);
+  assert.equal(isDatabaseConfigurationError(null), false);
+});
