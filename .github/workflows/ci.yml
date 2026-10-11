@@ -4,72 +4,145 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan repository history with Gitleaks
+        run: >-
+          docker run --rm
+          -v "${GITHUB_WORKSPACE}:/path"
+          ghcr.io/gitleaks/gitleaks:v8.30.0@sha256:691af3c7c5a48b16f187ce3446d5f194838f91238f27270ed36eef6359a574d9
+          git --redact --no-banner /path
+
   frontend:
+    name: Frontend and admin checks
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7.0.1
         with:
-          node-version: 22
+          persist-credentials: false
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - run: npm ci
-      - run: npm audit --audit-level=high
-      - run: npm run lint
-      - run: npm run build
-      - run: npm test -- --run
+          cache-dependency-path: |
+            frontend/package-lock.json
+            admin/package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Audit frontend dependencies
+        run: npm audit --audit-level=high
+      - name: Install admin dependencies
+        run: npm ci --prefix ../admin
+      - name: Audit admin dependencies
+        run: npm audit --prefix ../admin --audit-level=high
+      - name: Lint frontend
+        run: npm run lint
+      - name: Build admin and frontend for production
+        env:
+          VITE_DEPLOYMENT_ENV: preview
+          VITE_API_BASE: https://api-preview.example.invalid/api/v1
+        run: npm run build
+      - name: Run frontend unit and component tests
+        run: npm test -- --run
 
   backend:
+    name: Backend build and unit tests
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7.0.1
         with:
-          node-version: 22
+          persist-credentials: false
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
           cache: npm
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
-      - run: npm audit --audit-level=high
-      - run: npm run build
-      - run: npm test
+      - name: Audit backend dependencies
+        run: npm audit --audit-level=high
+      - name: Type check and build backend
+        run: npm run build
+      - name: Run backend unit and smoke tests
+        run: npm test
 
-  database:
+  database-integration:
+    name: PostgreSQL migrations, schema, and API integration
     runs-on: ubuntu-latest
     services:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_DB: appdb
+          POSTGRES_DB: appdb_integration
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d appdb"
+          --health-cmd "pg_isready -U postgres -d appdb_integration"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
+    env:
+      NODE_ENV: test
+      BACKEND_TEST_DATABASE_MODE: available
+      BACKEND_TEST_DATABASE_NAME: appdb_integration
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/appdb_integration
+      DIRECT_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/appdb_integration
+      POSTGRES_DB: appdb_integration
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      ADMIN_EMAIL: ci-admin@example.test
+      ADMIN_PASSWORD: ci-only-password-not-for-deployment
+      JWT_SECRET: ci-only-jwt-secret-not-for-deployment-0123456789
     steps:
-      - uses: actions/checkout@v4
-      - name: Apply migrations
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+      - name: Audit backend dependencies
+        working-directory: backend
+        run: npm audit --audit-level=high
+      - name: Apply ordered migrations with the application runner
+        working-directory: backend
+        run: npm run db:migrate
+      - name: Verify reruns are checksum-safe and idempotent
+        working-directory: backend
+        run: npm run db:migrate
+      - name: Run database schema smoke checks
         env:
           PGPASSWORD: postgres
-        run: |
-          for migration in database/migrations/[0-9][0-9][0-9]_*.sql; do
-            psql --host 127.0.0.1 --port 5432 --username postgres --dbname appdb --set ON_ERROR_STOP=1 --file "$migration"
-          done
-      - name: Run schema smoke tests
-        env:
-          PGPASSWORD: postgres
-        run: psql --host 127.0.0.1 --port 5432 --username postgres --dbname appdb --set ON_ERROR_STOP=1 --file database/tests/schema_smoke_tests.sql
+        run: psql --host 127.0.0.1 --port 5432 --username postgres --dbname appdb_integration --set ON_ERROR_STOP=1 --file database/tests/schema_smoke_tests.sql
+      - name: Run isolated API/database integration tests
+        working-directory: backend
+        run: npm run test:integration
