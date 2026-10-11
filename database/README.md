@@ -83,6 +83,7 @@ Migrations are intentionally ordered and plain SQL:
 - `migrations/018_make_protected_media_sharing_explicit.sql`
 - `migrations/019_create_api_error_logs.sql`
 - `migrations/020_trim_redundant_slug_indexes_and_audit_hold.sql`
+- `migrations/021_track_newsletter_delivery_webhooks.sql`
 
 Homepage image bytes are held in PostgreSQL `BYTEA`. Import requires adequate database storage and backup capacity (about 138 MiB for the current homepage image manifest).
 
@@ -95,6 +96,8 @@ npm.cmd --prefix backend run db:migrate
 The runner applies every pending numbered migration and records checksums in `app_schema_migrations`. Use a direct connection URL for migrations; the pooled `DATABASE_URL` is for the running API. Test pending migrations on a Neon branch before applying them to production.
 
 Migration 020 removes only the redundant named slug indexes; the original `UNIQUE` constraints continue enforcing slug uniqueness. It also adds `audit_events.legal_hold`, defaulting existing and new rows to `FALSE`. The migration is transactional and does not rewrite or delete application data. Dropping indexes takes a PostgreSQL table lock briefly; check for long-running transactions before applying it to a busy production database. Do not edit an applied migration; use a new numbered migration for later changes.
+
+Migration 021 adds a PostgreSQL deduplication record for newsletter delivery webhook event IDs and limits accepted event types to delivery, bounce, or complaint. It is transactional; the application uses the primary key to recognize provider retries.
 
 Migration 016 adds shared PostgreSQL-backed rate-limit buckets, contact-inquiry idempotency, and a user token version used to revoke existing JWTs after password resets. Requests to protected APIs use the shared rate-limit table, so apply all migrations before deploying the corresponding backend version. The contact form sends a UUID `Idempotency-Key`; retries with the same key and body return the original inquiry rather than inserting a duplicate.
 

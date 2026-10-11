@@ -1,5 +1,10 @@
 -- Smoke tests for required schema, constraints, and key behavior.
 
+-- Keep every fixture and destructive assertion isolated. This script is used
+-- against fresh CI databases and temporary restore databases; no test rows
+-- should persist if a later assertion fails or the script is rerun.
+BEGIN;
+
 DO $$
 BEGIN
   ASSERT (EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'blog_posts')), 'blog_posts table missing';
@@ -26,7 +31,7 @@ DO $$
 BEGIN
   ASSERT (EXISTS (SELECT 1 FROM pg_indexes WHERE tablename = 'blog_posts' AND indexdef LIKE 'CREATE UNIQUE INDEX% (slug)')), 'Blog slug uniqueness is not enforced';
   ASSERT (EXISTS (SELECT 1 FROM pg_indexes WHERE tablename = 'events' AND indexdef LIKE 'CREATE UNIQUE INDEX% (slug)')), 'Event slug uniqueness is not enforced';
-  ASSERT (NOT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname IN ('uq_blog_posts_slug', 'uq_events_slug')), 'Redundant slug index remains';
+  ASSERT (NOT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname IN ('uq_blog_posts_slug', 'uq_events_slug'))), 'Redundant slug index remains';
   ASSERT (EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'uq_newsletter_email')), 'Missing newsletter email unique index';
   ASSERT (EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'uq_users_email_lower')), 'Missing case-insensitive user email unique index';
   ASSERT (EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'uq_users_google_subject')), 'Missing Google subject unique index';
@@ -39,7 +44,7 @@ BEGIN
   ASSERT (EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'auth_provider')), 'users.auth_provider column missing';
   ASSERT (EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'google_subject')), 'users.google_subject column missing';
   ASSERT (EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'password_reset_otps' AND column_name = 'code_hash')), 'password_reset_otps.code_hash column missing';
-  ASSERT (EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'audit_events' AND column_name = 'legal_hold' AND is_nullable = 'NO'), 'audit_events.legal_hold column missing or nullable';
+  ASSERT (EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'audit_events' AND column_name = 'legal_hold' AND is_nullable = 'NO')), 'audit_events.legal_hold column missing or nullable';
 END $$;
 
 DO $$
@@ -141,3 +146,5 @@ BEGIN
     RAISE NOTICE 'seed data present';
   END IF;
 END $$;
+
+ROLLBACK;
