@@ -14,8 +14,14 @@ const DATABASE_NETWORK_CODES = new Set([
 const DATABASE_CONFIGURATION_SQLSTATES = new Set(['28P01', '3D000']);
 
 function errorCode(error: unknown): string | undefined {
-  if (!error || typeof error !== 'object' || !('code' in error)) return undefined;
-  return typeof error.code === 'string' ? error.code : undefined;
+  let current = error;
+  const visited = new Set<object>();
+  while (current && typeof current === 'object' && !visited.has(current)) {
+    visited.add(current);
+    if ('code' in current && typeof current.code === 'string') return current.code;
+    current = 'cause' in current ? current.cause : undefined;
+  }
+  return undefined;
 }
 
 export function isDatabaseUnavailable(error: unknown): boolean {
@@ -24,8 +30,16 @@ export function isDatabaseUnavailable(error: unknown): boolean {
     return code.startsWith('08') || UNAVAILABLE_SQLSTATES.has(code) || DATABASE_NETWORK_CODES.has(code);
   }
 
-  if (!(error instanceof Error)) return false;
-  return /could not connect to server|connection terminated unexpectedly|timeout exceeded when trying to connect/i.test(error.message);
+  let current = error;
+  const visited = new Set<object>();
+  while (current && typeof current === 'object' && !visited.has(current)) {
+    visited.add(current);
+    if (current instanceof Error && /could not connect to server|connection terminated unexpectedly|connection terminated due to connection timeout|timeout exceeded when trying to connect/i.test(current.message)) {
+      return true;
+    }
+    current = 'cause' in current ? current.cause : undefined;
+  }
+  return false;
 }
 
 export function isDatabaseConfigurationError(error: unknown): boolean {
