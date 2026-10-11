@@ -24,6 +24,17 @@ test('GET /api/v1/health reports process liveness when the database is unavailab
   assert.ok(typeof res.headers['x-request-id'] === 'string');
 });
 
+test('CORS preflight allows If-Match for admin optimistic-concurrency writes', async () => {
+  const res = await request(app)
+    .options('/api/v1/admin/blogs/00000000-0000-4000-8000-000000000001/moderation/submit-review')
+    .set('Origin', 'http://127.0.0.1:4174')
+    .set('Access-Control-Request-Method', 'POST')
+    .set('Access-Control-Request-Headers', 'authorization,content-type,if-match');
+
+  assert.equal(res.status, 204);
+  assert.match(res.headers['access-control-allow-headers'] ?? '', /if-match/i);
+});
+
 test('observability snapshots are not cacheable', async () => {
   const response = await request(app).get('/api/v1/observability/snapshot');
   assert.equal(response.status, 200);
@@ -500,14 +511,13 @@ test('editorial AI suggestions require admin authentication', async () => {
   assert.equal(response.body.error, 'unauthorized');
 });
 
-test('POST /api/v1/admin/login issues a JWT for valid credentials', async () => {
+test('POST /api/v1/admin/login fails closed when durable audit storage is unavailable', async () => {
   const res = await request(app)
     .post('/api/v1/admin/login')
     .send({ email: 'admin@voiceofdigi.org', password: 'admin123' });
 
-  assert.equal(res.status, 200);
-  assert.ok(typeof res.body.token === 'string');
-  assert.equal(res.body.user.email, 'admin@voiceofdigi.org');
+  assert.equal(res.status, 503);
+  assert.equal(res.body.token, undefined);
 });
 
 test('POST /api/v1/admin/login rejects invalid credentials', async () => {

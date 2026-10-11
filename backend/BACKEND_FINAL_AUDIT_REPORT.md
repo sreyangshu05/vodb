@@ -1,5 +1,7 @@
 # Backend Final Audit Report
 
+> **Historical snapshot:** This report contains point-in-time test counts and configuration values from an earlier audit. Do not use those numbers as current release evidence. See the current [production operations runbook](../docs/operations/PRODUCTION-OPERATIONS-RUNBOOK.md), [observability guidance](../docs/operations/OBSERVABILITY-AND-ALERTING.md), and CI workflow for current procedures and checks.
+
 ## Executive Summary
 The backend implementation has been hardened and aligned to the actual editorial product domain. It now exposes the public API contract, enforces authentication for the admin surface, uses structured validation, and returns honest 503 responses when the database layer is unavailable instead of fake success payloads.
 

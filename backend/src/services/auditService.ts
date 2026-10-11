@@ -1,5 +1,6 @@
 import { db } from '../lib/db.js';
 import { logger } from '../utils/logger.js';
+import type { PoolClient } from 'pg';
 
 const AUDIT_WRITE_ATTEMPTS = 3;
 const AUDIT_RETRY_DELAY_MS = 100;
@@ -14,6 +15,21 @@ export interface AuditEventInput {
   resourceId?: string | null;
   metadata?: Record<string, unknown>;
   requestId?: string | null;
+}
+
+export async function insertAuditEvent(client: Pick<PoolClient, 'query'>, event: AuditEventInput): Promise<void> {
+  await client.query(
+    `INSERT INTO audit_events (actor_id, action, resource_type, resource_id, metadata, request_id)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [
+      isUuid(event.actorId) ? event.actorId : null,
+      event.action,
+      event.resourceType,
+      event.resourceId ?? null,
+      event.metadata ?? null,
+      event.requestId ?? null,
+    ],
+  );
 }
 
 function isUuid(value: string | null | undefined): value is string {

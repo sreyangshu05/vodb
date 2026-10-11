@@ -8,9 +8,10 @@ import { db } from '../lib/db.js';
 import { signToken, getMockAdminUser, verifyAdminPassword } from '../services/authService.js';
 import { createRateLimiter } from '../middleware/rateLimit.js';
 import { env } from '../config/env.js';
-import { recordAuditEvent } from '../services/auditService.js';
+import { insertAuditEvent, type AuditEventInput } from '../services/auditService.js';
 import { metrics } from '../services/metricsService.js';
 import { suggestEditorialMetadata } from '../services/knowledgeService.js';
+import type { PoolClient, QueryResultRow } from 'pg';
 
 const router = Router();
 
@@ -94,6 +95,17 @@ function requireVersion(req: Request) {
   return version;
 }
 
+async function mutateAndAudit<T extends QueryResultRow>(
+  mutate: (client: PoolClient) => Promise<T[]>,
+  audit: (row: T) => AuditEventInput,
+): Promise<T[]> {
+  return db.transaction(async (client) => {
+    const rows = await mutate(client);
+    if (rows[0]) await insertAuditEvent(client, audit(rows[0]));
+    return rows;
+  });
+}
+
 router.post('/login', loginLimiter, async (req, res, next) => {
   try {
     const email = String(req.body?.email ?? '').trim();
@@ -112,13 +124,12 @@ router.post('/login', loginLimiter, async (req, res, next) => {
 
     const user = getMockAdminUser(email.toLowerCase());
     const token = await signToken(user);
-    void recordAuditEvent({
+    await db.transaction((client) => insertAuditEvent(client, {
       action: 'admin.login',
       resourceType: 'admin_session',
       resourceId: user.id,
-      metadata: { email: user.email },
       requestId: req.headers['x-request-id'] as string | undefined,
-    });
+    }));
     res.json({ token, user });
   } catch (error) {
     if (error instanceof AppError) {
@@ -193,18 +204,21 @@ router.post('/content-review/:resource/:id', async (req, res, next) => {
     const id = z.string().uuid().parse(req.params.id);
     const table = resource === 'blogs' ? 'blog_posts' : 'events';
     const resourceType = resource === 'blogs' ? 'blog_post' : 'event';
-    const exists = await db.query(`SELECT 1 FROM ${table} WHERE id = $1 AND published = TRUE AND moderation_status = 'approved'`, [id]);
-    if (!exists.rows[0]) throw new AppError(404, 'published_content_not_found', 'Published content not found.');
     const actorId = req.user?.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(req.user.id)
       ? req.user.id
       : null;
-    const review = await db.query<{ occurred_at: string }>(
-      `INSERT INTO audit_events (actor_id, action, resource_type, resource_id, metadata, request_id)
-       VALUES ($1, 'admin.content.review', $2, $3, $4, $5)
-       RETURNING occurred_at`,
-      [actorId, resourceType, id, { source: 'freshness_queue' }, req.headers['x-request-id'] as string | undefined],
-    );
-    res.status(201).json({ reviewedAt: review.rows[0]?.occurred_at });
+    const reviewedAt = await db.transaction(async (client) => {
+      const exists = await client.query(`SELECT 1 FROM ${table} WHERE id = $1 AND published = TRUE AND moderation_status = 'approved'`, [id]);
+      if (!exists.rows[0]) throw new AppError(404, 'published_content_not_found', 'Published content not found.');
+      const review = await client.query<{ occurred_at: string }>(
+        `INSERT INTO audit_events (actor_id, action, resource_type, resource_id, metadata, request_id)
+         VALUES ($1, 'admin.content.review', $2, $3, $4, $5)
+         RETURNING occurred_at`,
+        [actorId, resourceType, id, { source: 'freshness_queue' }, req.headers['x-request-id'] as string | undefined],
+      );
+      return review.rows[0]?.occurred_at;
+    });
+    res.status(201).json({ reviewedAt });
   } catch (error) {
     if (error instanceof z.ZodError) return next(new AppError(422, 'invalid_content_review', 'Content type or id is invalid.'));
     next(error);
@@ -321,18 +335,22 @@ router.get('/inquiries', async (req, res, next) => {
 router.get('/inquiries/:id', async (req, res, next) => {
   try {
     const id = z.string().uuid().parse(req.params.id);
-    const result = await db.query(
-      `SELECT id, name, email, subject, message, status, source, spam_score, created_at, updated_at
-       FROM contact_inquiries WHERE id = $1`, [id]);
-    if (!result.rows[0]) throw new AppError(404, 'inquiry_not_found', 'Inquiry not found.');
-    void recordAuditEvent({
-      actorId: req.user?.id,
-      action: 'admin.inquiry.read',
-      resourceType: 'contact_inquiry',
-      resourceId: id,
-      requestId: req.headers['x-request-id'] as string | undefined,
+    const inquiry = await db.transaction(async (client) => {
+      const result = await client.query(
+        `SELECT id, name, email, subject, message, status, source, spam_score, created_at, updated_at
+         FROM contact_inquiries WHERE id = $1`, [id]);
+      if (!result.rows[0]) return undefined;
+      await insertAuditEvent(client, {
+        actorId: req.user?.id,
+        action: 'admin.inquiry.read',
+        resourceType: 'contact_inquiry',
+        resourceId: id,
+        requestId: req.headers['x-request-id'] as string | undefined,
+      });
+      return result.rows[0];
     });
-    res.json(result.rows[0]);
+    if (!inquiry) throw new AppError(404, 'inquiry_not_found', 'Inquiry not found.');
+    res.json(inquiry);
   } catch (error) {
     if (error instanceof z.ZodError) return next(new AppError(422, 'invalid_inquiry_id', 'A valid inquiry id is required.'));
     next(error);
@@ -343,12 +361,14 @@ router.patch('/inquiries/:id', async (req, res, next) => {
   try {
     const id = z.string().uuid().parse(req.params.id);
     const status = inquiryStatusSchema.parse(req.body?.status);
-    const result = await db.query(
-      `UPDATE contact_inquiries SET status = $1, handled_at = CASE WHEN $1 IN ('resolved','spam') THEN NOW() ELSE NULL END, updated_at = NOW()
-       WHERE id = $2 RETURNING id, name, email, subject, message, status, source, spam_score, created_at, updated_at`, [status, id]);
-    if (!result.rows[0]) throw new AppError(404, 'inquiry_not_found', 'Inquiry not found.');
-    void recordAuditEvent({ actorId: req.user?.id, action: 'admin.inquiry.status_update', resourceType: 'contact_inquiry', resourceId: id, metadata: { status }, requestId: req.headers['x-request-id'] as string | undefined });
-    res.json(result.rows[0]);
+    const rows = await mutateAndAudit(
+      async (client) => (await client.query(
+        `UPDATE contact_inquiries SET status = $1, handled_at = CASE WHEN $1 IN ('resolved','spam') THEN NOW() ELSE NULL END, updated_at = NOW()
+         WHERE id = $2 RETURNING id, name, email, subject, message, status, source, spam_score, created_at, updated_at`, [status, id])).rows,
+      (row) => ({ actorId: req.user?.id, action: 'admin.inquiry.status_update', resourceType: 'contact_inquiry', resourceId: String(row.id), metadata: { status }, requestId: req.headers['x-request-id'] as string | undefined }),
+    );
+    if (!rows[0]) throw new AppError(404, 'inquiry_not_found', 'Inquiry not found.');
+    res.json(rows[0]);
   } catch (error) { if (error instanceof z.ZodError) return next(new AppError(422, 'invalid_inquiry_update', 'A valid inquiry id and status are required.')); next(error); }
 });
 
@@ -418,7 +438,8 @@ router.post('/blogs', async (req, res, next) => {
   try {
     const payload = blogPayloadSchema.parse(req.body ?? {});
     await assertMediaExists(payload.imageMediaId);
-    const result = await db.query(
+    const rows = await mutateAndAudit(
+      async (client) => (await client.query(
       `INSERT INTO blog_posts (title, slug, content, meta_title, meta_description, published, published_at, moderation_status, created_at, updated_at, image_media_id)
        VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $6 THEN NOW() ELSE NULL END, CASE WHEN $6 THEN 'approved' ELSE 'draft' END, NOW(), NOW(), $7)
        RETURNING *`,
@@ -430,17 +451,10 @@ router.post('/blogs', async (req, res, next) => {
         payload.metaDescription ?? null,
         payload.published,
         payload.imageMediaId ?? null,
-      ]
+      ])).rows,
+      (row) => ({ actorId: req.user?.id, action: 'admin.blog.create', resourceType: 'blog_post', resourceId: String(row.id), metadata: { slug: payload.slug, published: payload.published }, requestId: req.headers['x-request-id'] as string | undefined }),
     );
-    void recordAuditEvent({
-      actorId: req.user?.id,
-      action: 'admin.blog.create',
-      resourceType: 'blog_post',
-      resourceId: result.rows[0]?.id,
-      metadata: { slug: payload.slug, published: payload.published },
-      requestId: req.headers['x-request-id'] as string | undefined,
-    });
-    res.status(201).json(result.rows[0]);
+    res.status(201).json(rows[0]);
   } catch (error) {
     if (error instanceof z.ZodError) {
       return next(new AppError(422, 'invalid_payload', 'Blog payload is invalid.', { issues: error.issues }));
@@ -471,19 +485,21 @@ router.patch('/blogs/:id', async (req, res, next) => {
     if (!fields.length) throw new AppError(422, 'invalid_payload', 'At least one blog field is required.');
 
     values.push(id, expectedVersion);
-    const result = await db.query(
+    const rows = await mutateAndAudit(
+      async (client) => (await client.query(
       `UPDATE blog_posts SET ${fields.join(', ')}, updated_at = NOW()
       WHERE id = $${values.length - 1} AND updated_at = $${values.length}
        RETURNING *`,
       values,
+      )).rows,
+      (row) => ({ actorId: req.user?.id, action: 'admin.blog.update', resourceType: 'blog_post', resourceId: String(row.id), metadata: { fields: Object.keys(payload) }, requestId: req.headers['x-request-id'] as string | undefined }),
     );
-    if (!result.rows[0]) {
+    if (!rows[0]) {
       const exists = await db.query('SELECT 1 FROM blog_posts WHERE id = $1', [id]);
       throw new AppError(exists.rows[0] ? 409 : 404, exists.rows[0] ? 'concurrent_update' : 'blog_not_found', exists.rows[0] ? 'The blog changed since it was loaded. Refresh and try again.' : 'Blog post not found.');
     }
-    res.setHeader('ETag', `"${result.rows[0].updated_at}"`);
-    void recordAuditEvent({ actorId: req.user?.id, action: 'admin.blog.update', resourceType: 'blog_post', resourceId: id, metadata: { fields: Object.keys(payload) }, requestId: req.headers['x-request-id'] as string | undefined });
-    res.json(result.rows[0]);
+    res.setHeader('ETag', `"${rows[0].updated_at}"`);
+    res.json(rows[0]);
   } catch (error) {
     if (error instanceof z.ZodError) return next(new AppError(422, 'invalid_payload', 'Blog update payload is invalid.', { issues: error.issues }));
     if (isUniqueViolation(error)) return next(new AppError(409, 'blog_slug_already_exists', 'A blog post with this slug already exists.'));
@@ -495,12 +511,14 @@ router.delete('/blogs/:id', async (req, res, next) => {
   try {
     const id = z.string().uuid().parse(req.params.id);
     const expectedVersion = requireVersion(req);
-    const result = await db.query<{ id: string }>('DELETE FROM blog_posts WHERE id = $1 AND updated_at = $2 RETURNING id', [id, expectedVersion]);
-    if (!result.rows[0]) {
+    const rows = await mutateAndAudit(
+      async (client) => (await client.query<{ id: string }>('DELETE FROM blog_posts WHERE id = $1 AND updated_at = $2 RETURNING id', [id, expectedVersion])).rows,
+      (row) => ({ actorId: req.user?.id, action: 'admin.blog.delete', resourceType: 'blog_post', resourceId: row.id, requestId: req.headers['x-request-id'] as string | undefined }),
+    );
+    if (!rows[0]) {
       const exists = await db.query('SELECT 1 FROM blog_posts WHERE id = $1', [id]);
       throw new AppError(exists.rows[0] ? 409 : 404, exists.rows[0] ? 'concurrent_update' : 'blog_not_found', exists.rows[0] ? 'The blog changed since it was loaded. Refresh and try again.' : 'Blog post not found.');
     }
-    void recordAuditEvent({ actorId: req.user?.id, action: 'admin.blog.delete', resourceType: 'blog_post', resourceId: id, requestId: req.headers['x-request-id'] as string | undefined });
     res.status(204).send();
   } catch (error) {
     if (error instanceof z.ZodError) return next(new AppError(400, 'invalid_blog_id', 'Blog id must be a UUID.'));
@@ -522,7 +540,8 @@ router.post('/events', async (req, res, next) => {
   try {
     const payload = eventPayloadSchema.parse(req.body ?? {});
     await assertMediaExists(payload.imageMediaId);
-    const result = await db.query(
+    const rows = await mutateAndAudit(
+      async (client) => (await client.query(
       `INSERT INTO events (title, slug, description, event_date, ends_at, all_day, location, published, moderation_status, capacity, registration_url, meta_title, meta_description, created_at, updated_at, image_media_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CASE WHEN $8 THEN 'approved' ELSE 'draft' END, $9, $10, $11, $12, NOW(), NOW(), $13)
        RETURNING *`,
@@ -540,17 +559,10 @@ router.post('/events', async (req, res, next) => {
         payload.metaTitle ?? null,
         payload.metaDescription ?? null,
         payload.imageMediaId ?? null,
-      ]
+      ])).rows,
+      (row) => ({ actorId: req.user?.id, action: 'admin.event.create', resourceType: 'event', resourceId: String(row.id), metadata: { slug: payload.slug, published: payload.published }, requestId: req.headers['x-request-id'] as string | undefined }),
     );
-    void recordAuditEvent({
-      actorId: req.user?.id,
-      action: 'admin.event.create',
-      resourceType: 'event',
-      resourceId: result.rows[0]?.id,
-      metadata: { slug: payload.slug, published: payload.published },
-      requestId: req.headers['x-request-id'] as string | undefined,
-    });
-    res.status(201).json(result.rows[0]);
+    res.status(201).json(rows[0]);
   } catch (error) {
     if (error instanceof z.ZodError) {
       return next(new AppError(422, 'invalid_payload', 'Event payload is invalid.', { issues: error.issues }));
@@ -588,19 +600,21 @@ router.patch('/events/:id', async (req, res, next) => {
     if (!fields.length) throw new AppError(422, 'invalid_payload', 'At least one event field is required.');
 
     values.push(id, expectedVersion);
-    const result = await db.query(
+    const rows = await mutateAndAudit(
+      async (client) => (await client.query(
       `UPDATE events SET ${fields.join(', ')}, updated_at = NOW()
       WHERE id = $${values.length - 1} AND updated_at = $${values.length}
        RETURNING *`,
       values,
+      )).rows,
+      (row) => ({ actorId: req.user?.id, action: 'admin.event.update', resourceType: 'event', resourceId: String(row.id), metadata: { fields: Object.keys(payload) }, requestId: req.headers['x-request-id'] as string | undefined }),
     );
-    if (!result.rows[0]) {
+    if (!rows[0]) {
       const exists = await db.query('SELECT 1 FROM events WHERE id = $1', [id]);
       throw new AppError(exists.rows[0] ? 409 : 404, exists.rows[0] ? 'concurrent_update' : 'event_not_found', exists.rows[0] ? 'The event changed since it was loaded. Refresh and try again.' : 'Event not found.');
     }
-    res.setHeader('ETag', `"${result.rows[0].updated_at}"`);
-    void recordAuditEvent({ actorId: req.user?.id, action: 'admin.event.update', resourceType: 'event', resourceId: id, metadata: { fields: Object.keys(payload) }, requestId: req.headers['x-request-id'] as string | undefined });
-    res.json(result.rows[0]);
+    res.setHeader('ETag', `"${rows[0].updated_at}"`);
+    res.json(rows[0]);
   } catch (error) {
     if (error instanceof z.ZodError) return next(new AppError(422, 'invalid_payload', 'Event update payload is invalid.', { issues: error.issues }));
     if (isUniqueViolation(error)) return next(new AppError(409, 'event_slug_already_exists', 'An event with this slug already exists.'));
@@ -613,12 +627,14 @@ router.delete('/events/:id', async (req, res, next) => {
   try {
     const id = z.string().uuid().parse(req.params.id);
     const expectedVersion = requireVersion(req);
-    const result = await db.query<{ id: string }>('DELETE FROM events WHERE id = $1 AND updated_at = $2 RETURNING id', [id, expectedVersion]);
-    if (!result.rows[0]) {
+    const rows = await mutateAndAudit(
+      async (client) => (await client.query<{ id: string }>('DELETE FROM events WHERE id = $1 AND updated_at = $2 RETURNING id', [id, expectedVersion])).rows,
+      (row) => ({ actorId: req.user?.id, action: 'admin.event.delete', resourceType: 'event', resourceId: row.id, requestId: req.headers['x-request-id'] as string | undefined }),
+    );
+    if (!rows[0]) {
       const exists = await db.query('SELECT 1 FROM events WHERE id = $1', [id]);
       throw new AppError(exists.rows[0] ? 409 : 404, exists.rows[0] ? 'concurrent_update' : 'event_not_found', exists.rows[0] ? 'The event changed since it was loaded. Refresh and try again.' : 'Event not found.');
     }
-    void recordAuditEvent({ actorId: req.user?.id, action: 'admin.event.delete', resourceType: 'event', resourceId: id, requestId: req.headers['x-request-id'] as string | undefined });
     res.status(204).send();
   } catch (error) {
     if (error instanceof z.ZodError) return next(new AppError(400, 'invalid_event_id', 'Event id must be a UUID.'));
@@ -634,25 +650,43 @@ router.post('/:resource/:id/moderation/:action', async (req, res, next) => {
     const expectedVersion = requireVersion(req);
     const table = resource === 'blogs' ? 'blog_posts' : 'events';
     const resourceType = resource === 'blogs' ? 'blog_post' : 'event';
+    const allowedPreviousStates = {
+      'submit-review': ['draft', 'rejected'],
+      approve: ['pending_review'],
+      reject: ['pending_review'],
+      archive: ['approved'],
+    } as const;
+    const publishedAtUpdate = resource === 'blogs'
+      ? 'published_at = CASE WHEN $2 THEN COALESCE(published_at, NOW()) ELSE NULL END,'
+      : '';
     const moderationStatus = action === 'submit-review' ? 'pending_review' : action === 'approve' ? 'approved' : action === 'reject' ? 'rejected' : 'archived';
     const published = moderationStatus === 'approved';
-    const result = await db.query(
+    const rows = await mutateAndAudit(
+      async (client) => (await client.query(
       `UPDATE ${table}
        SET moderation_status = $1,
            published = $2,
-           published_at = CASE WHEN $2 THEN COALESCE(published_at, NOW()) ELSE NULL END,
+           ${publishedAtUpdate}
            updated_at = NOW()
-       WHERE id = $3 AND updated_at = $4
+       WHERE id = $3 AND updated_at = $4 AND moderation_status = ANY($5::varchar[])
        RETURNING *`,
-      [moderationStatus, published, id, expectedVersion],
+      [moderationStatus, published, id, expectedVersion, allowedPreviousStates[action]],
+      )).rows,
+      (row) => ({ actorId: req.user?.id, action: `admin.${resourceType}.moderation.${action}`, resourceType, resourceId: String(row.id), metadata: { moderationStatus }, requestId: req.headers['x-request-id'] as string | undefined }),
     );
-    if (!result.rows[0]) {
-      const exists = await db.query(`SELECT 1 FROM ${table} WHERE id = $1`, [id]);
-      throw new AppError(exists.rows[0] ? 409 : 404, exists.rows[0] ? 'concurrent_update' : `${resourceType}_not_found`, exists.rows[0] ? `The ${resourceType} changed since it was loaded. Refresh and try again.` : `${resourceType} not found.`);
+    if (!rows[0]) {
+      const current = await db.query<{ version_matches: boolean; moderation_status: string }>(
+        `SELECT updated_at = $2::timestamptz AS version_matches, moderation_status FROM ${table} WHERE id = $1`,
+        [id, expectedVersion],
+      );
+      if (!current.rows[0]) throw new AppError(404, `${resourceType}_not_found`, `${resourceType} not found.`);
+      if (!current.rows[0].version_matches) {
+        throw new AppError(409, 'concurrent_update', `The ${resourceType} changed since it was loaded. Refresh and try again.`);
+      }
+      throw new AppError(409, 'invalid_moderation_transition', `Cannot ${action} a ${resourceType} in its current review state.`);
     }
-    void recordAuditEvent({ actorId: req.user?.id, action: `admin.${resourceType}.moderation.${action}`, resourceType, resourceId: id, metadata: { moderationStatus }, requestId: req.headers['x-request-id'] as string | undefined });
-    res.setHeader('ETag', `"${result.rows[0].updated_at}"`);
-    res.json(result.rows[0]);
+    res.setHeader('ETag', `"${rows[0].updated_at}"`);
+    res.json(rows[0]);
   } catch (error) {
     if (error instanceof z.ZodError) return next(new AppError(422, 'invalid_moderation_request', 'Resource, id, action, or version is invalid.', { issues: error.issues }));
     next(error);

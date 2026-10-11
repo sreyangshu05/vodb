@@ -66,7 +66,9 @@ app.use(
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Media-Access-Token', 'X-Request-Id', 'X-Observability-Token', 'Idempotency-Key'],
+    // If-Match protects admin edits and moderation actions from stale writes.
+    // It must be allowed through browser preflight for the hosted admin UI.
+    allowedHeaders: ['Content-Type', 'Authorization', 'If-Match', 'X-Requested-With', 'X-Media-Access-Token', 'X-Request-Id', 'X-Observability-Token', 'Idempotency-Key'],
   })
 );
 app.use(helmet({

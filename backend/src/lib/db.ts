@@ -1,4 +1,4 @@
-import { Pool, types, type QueryResultRow } from 'pg';
+import { Pool, types, type PoolClient, type QueryResultRow } from 'pg';
 import { env } from '../config/env.js';
 import { metrics } from '../services/metricsService.js';
 import { logger } from '../utils/logger.js';
@@ -95,9 +95,34 @@ async function runQuery<T extends QueryResultRow>(text: string, params?: unknown
   }
 }
 
+async function runTransaction<T>(operation: (client: PoolClient) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await operation(client);
+    await client.query('COMMIT');
+    void flushPendingApiErrorLogs();
+    return result;
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      logger.error('database_transaction_rollback_failed', {
+        errorName: rollbackError instanceof Error ? rollbackError.name : 'UnknownError',
+      });
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export const db = {
   async query<T extends QueryResultRow>(text: string, params?: unknown[]) {
     return runQuery<T>(text, params);
+  },
+  async transaction<T>(operation: (client: PoolClient) => Promise<T>) {
+    return runTransaction(operation);
   },
   async healthcheck() {
     const result = await runQuery<{

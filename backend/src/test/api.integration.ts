@@ -11,6 +11,9 @@ import { createPasswordReset, signToken } from '../services/authService.js';
 import { createMediaAccess, resolveMediaToken } from '../services/mediaService.js';
 import { createNewsletterSubscription, processNewsletterDeliveryEvent } from '../services/submissionService.js';
 import { createRateLimiter } from '../middleware/rateLimit.js';
+import { registerUser, issueReaderEmailVerification } from '../services/authService.js';
+import { insertAuditEvent } from '../services/auditService.js';
+import sharp from 'sharp';
 
 const integrationEnabled = process.env.BACKEND_TEST_DATABASE_MODE === 'available';
 
@@ -111,6 +114,363 @@ test('concurrent blog updates use optimistic concurrency and return one 409 conf
     } else {
       await db.query('DELETE FROM blog_posts WHERE slug = $1', [slug]);
     }
+  }
+});
+
+test('published content journeys persist data and their admin audit records atomically', {
+  skip: integrationEnabled ? false : 'set BACKEND_TEST_DATABASE_MODE=available to run database integration tests',
+}, async () => {
+  const slug = `acceptance-${randomUUID()}`;
+  const loginRequestId = randomUUID();
+  let blogId: string | undefined;
+  let token: string | undefined;
+
+  try {
+    const login = await request(app)
+      .post('/api/v1/admin/login')
+      .set('X-Request-Id', loginRequestId)
+      .send({ email: env.ADMIN_EMAIL, password: env.ADMIN_PASSWORD });
+    assert.equal(login.status, 200);
+    token = login.body.token as string;
+
+    const created = await request(app)
+      .post('/api/v1/admin/blogs')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ title: 'Acceptance Fixture', slug, content: 'Synthetic published content for integration verification.', published: false });
+    assert.equal(created.status, 201);
+    blogId = created.body.id as string;
+
+    const submitted = await request(app)
+      .post(`/api/v1/admin/blogs/${blogId}/moderation/submit-review`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('If-Match', `"${created.body.updated_at as string}"`)
+      .send({});
+    assert.equal(submitted.status, 200);
+    assert.equal(submitted.body.moderation_status, 'pending_review');
+    assert.equal((await request(app).get(`/api/v1/blogs/slug/${slug}`)).status, 404);
+
+    const approved = await request(app)
+      .post(`/api/v1/admin/blogs/${blogId}/moderation/approve`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('If-Match', `"${submitted.body.updated_at as string}"`)
+      .send({});
+    assert.equal(approved.status, 200);
+    assert.equal(approved.body.published, true);
+
+    const list = await request(app).get('/api/v1/blogs');
+    assert.equal(list.status, 200);
+    assert.ok((list.body as Array<{ slug: string }>).some((item) => item.slug === slug));
+    const detail = await request(app).get(`/api/v1/blogs/slug/${slug}`);
+    assert.equal(detail.status, 200);
+    assert.equal(detail.body.title, 'Acceptance Fixture');
+
+    const updated = await request(app)
+      .patch(`/api/v1/admin/blogs/${blogId}`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('If-Match', `"${approved.body.updated_at as string}"`)
+      .send({ title: 'Acceptance Fixture Updated' });
+    assert.equal(updated.status, 200);
+    const updatedDetail = await request(app).get(`/api/v1/blogs/slug/${slug}`);
+    assert.equal(updatedDetail.body.title, 'Acceptance Fixture Updated');
+
+    const archived = await request(app)
+      .post(`/api/v1/admin/blogs/${blogId}/moderation/archive`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('If-Match', `"${updated.body.updated_at as string}"`)
+      .send({});
+    assert.equal(archived.status, 200);
+    assert.equal((await request(app).get(`/api/v1/blogs/slug/${slug}`)).status, 404);
+
+    const invalidTransition = await request(app)
+      .post(`/api/v1/admin/blogs/${blogId}/moderation/approve`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('If-Match', `"${archived.body.updated_at as string}"`)
+      .send({});
+    assert.equal(invalidTransition.status, 409);
+    assert.equal(invalidTransition.body.error, 'invalid_moderation_transition');
+    assert.equal((await request(app).get(`/api/v1/blogs/slug/${slug}`)).status, 404);
+
+    const deleted = await request(app)
+      .delete(`/api/v1/admin/blogs/${blogId}`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('If-Match', `"${archived.body.updated_at as string}"`);
+    assert.equal(deleted.status, 204);
+
+    const audit = await db.query<{ action: string; resource_id: string | null }>(
+      `SELECT action, resource_id FROM audit_events
+       WHERE resource_id = $1 AND action IN ('admin.blog.create','admin.blog.update','admin.blog.delete','admin.blog_post.moderation.submit-review','admin.blog_post.moderation.approve','admin.blog_post.moderation.archive')
+       ORDER BY occurred_at`,
+      [blogId],
+    );
+    assert.deepEqual(audit.rows.map((row) => row.action), [
+      'admin.blog.create', 'admin.blog_post.moderation.submit-review', 'admin.blog_post.moderation.approve',
+      'admin.blog.update', 'admin.blog_post.moderation.archive', 'admin.blog.delete',
+    ]);
+  } finally {
+    if (blogId) {
+      await db.query('DELETE FROM blog_posts WHERE id = $1', [blogId]);
+      await db.query('DELETE FROM audit_events WHERE resource_id = $1', [blogId]);
+    } else {
+      await db.query('DELETE FROM blog_posts WHERE slug = $1', [slug]);
+    }
+    await db.query('DELETE FROM audit_events WHERE request_id = $1', [loginRequestId]);
+  }
+});
+
+test('event create, edit, moderation, publication, and delete persist with atomic audit records', {
+  skip: integrationEnabled ? false : 'set BACKEND_TEST_DATABASE_MODE=available to run database integration tests',
+}, async () => {
+  const slug = `acceptance-event-${randomUUID()}`;
+  const loginRequestId = randomUUID();
+  const eventDate = new Date(Date.now() + 86_400_000).toISOString();
+  let eventId: string | undefined;
+  let token: string | undefined;
+
+  try {
+    const login = await request(app)
+      .post('/api/v1/admin/login')
+      .set('X-Request-Id', loginRequestId)
+      .send({ email: env.ADMIN_EMAIL, password: env.ADMIN_PASSWORD });
+    assert.equal(login.status, 200);
+    token = login.body.token as string;
+
+    const created = await request(app)
+      .post('/api/v1/admin/events')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        title: 'Acceptance Event',
+        slug,
+        description: 'Synthetic event created to verify the editorial workflow.',
+        eventDate,
+        allDay: false,
+        location: 'Local acceptance environment',
+        published: false,
+      });
+    assert.equal(created.status, 201);
+    eventId = created.body.id as string;
+    assert.equal(created.body.moderation_status, 'draft');
+    assert.equal((await request(app).get(`/api/v1/events/slug/${slug}`)).status, 404);
+
+    const updated = await request(app)
+      .patch(`/api/v1/admin/events/${eventId}`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('If-Match', `"${created.body.updated_at as string}"`)
+      .send({ description: 'Updated synthetic event details for acceptance verification.' });
+    assert.equal(updated.status, 200);
+
+    const submitted = await request(app)
+      .post(`/api/v1/admin/events/${eventId}/moderation/submit-review`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('If-Match', `"${updated.body.updated_at as string}"`)
+      .send({});
+    assert.equal(submitted.status, 200);
+    assert.equal(submitted.body.moderation_status, 'pending_review');
+
+    const approved = await request(app)
+      .post(`/api/v1/admin/events/${eventId}/moderation/approve`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('If-Match', `"${submitted.body.updated_at as string}"`)
+      .send({});
+    assert.equal(approved.status, 200);
+    assert.equal(approved.body.published, true);
+
+    const detail = await request(app).get(`/api/v1/events/slug/${slug}`);
+    assert.equal(detail.status, 200);
+    assert.equal(detail.body.description, 'Updated synthetic event details for acceptance verification.');
+
+    const invalidTransition = await request(app)
+      .post(`/api/v1/admin/events/${eventId}/moderation/reject`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('If-Match', `"${approved.body.updated_at as string}"`)
+      .send({});
+    assert.equal(invalidTransition.status, 409);
+    assert.equal(invalidTransition.body.error, 'invalid_moderation_transition');
+    assert.equal((await request(app).get(`/api/v1/events/slug/${slug}`)).status, 200);
+
+    const deleted = await request(app)
+      .delete(`/api/v1/admin/events/${eventId}`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('If-Match', `"${approved.body.updated_at as string}"`);
+    assert.equal(deleted.status, 204);
+    assert.equal((await request(app).get(`/api/v1/events/slug/${slug}`)).status, 404);
+
+    const audit = await db.query<{ action: string }>(
+      `SELECT action FROM audit_events WHERE resource_id = $1
+       AND action IN ('admin.event.create','admin.event.update','admin.event.moderation.submit-review','admin.event.moderation.approve','admin.event.delete')
+       ORDER BY occurred_at`,
+      [eventId],
+    );
+    assert.deepEqual(audit.rows.map((row) => row.action), [
+      'admin.event.create', 'admin.event.update', 'admin.event.moderation.submit-review',
+      'admin.event.moderation.approve', 'admin.event.delete',
+    ]);
+  } finally {
+    if (eventId) {
+      await db.query('DELETE FROM events WHERE id = $1', [eventId]);
+      await db.query('DELETE FROM audit_events WHERE resource_id = $1', [eventId]);
+    } else {
+      await db.query('DELETE FROM events WHERE slug = $1', [slug]);
+    }
+    await db.query('DELETE FROM audit_events WHERE request_id = $1', [loginRequestId]);
+  }
+});
+
+test('an audit constraint failure rolls back the corresponding database mutation', {
+  skip: integrationEnabled ? false : 'set BACKEND_TEST_DATABASE_MODE=available to run database integration tests',
+}, async () => {
+  const slug = `audit-rollback-${randomUUID()}`;
+  await assert.rejects(db.transaction(async (client) => {
+    await client.query(
+      'INSERT INTO blog_posts (title, slug, content) VALUES ($1, $2, $3)',
+      ['Audit rollback fixture', slug, 'Synthetic row must not survive audit failure.'],
+    );
+    await insertAuditEvent(client, {
+      action: 'a'.repeat(81),
+      resourceType: 'blog_post',
+      resourceId: slug,
+    });
+  }));
+  const persisted = await db.query('SELECT 1 FROM blog_posts WHERE slug = $1', [slug]);
+  assert.equal(persisted.rows.length, 0);
+});
+
+test('reader verification, login, saved-page ownership, and account deletion complete end to end at the API', {
+  skip: integrationEnabled ? false : 'set BACKEND_TEST_DATABASE_MODE=available to run database integration tests',
+}, async () => {
+  const email = `reader-acceptance-${randomUUID()}@example.invalid`;
+  let userId: string | undefined;
+
+  try {
+    const registered = await registerUser('Acceptance Reader', email, 'test-password-123');
+    userId = registered.id;
+    const verification = await issueReaderEmailVerification(email);
+    assert.ok(verification);
+    const verified = await request(app).post('/api/v1/auth/verify-email').send({ email, code: verification!.code });
+    assert.equal(verified.status, 200);
+    const login = await request(app).post('/api/v1/auth/login').send({ email, password: 'test-password-123' });
+    assert.equal(login.status, 200);
+    const token = login.body.token as string;
+
+    const saved = await request(app)
+      .post('/api/v1/auth/me/saved-pages')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ path: '/history', title: 'History' });
+    assert.equal(saved.status, 201);
+    const savedPages = await request(app).get('/api/v1/auth/me/saved-pages').set('Authorization', `Bearer ${token}`);
+    assert.equal(savedPages.status, 200);
+    assert.deepEqual(savedPages.body.items.map((item: { path: string }) => item.path), ['/history']);
+
+    const deletion = await request(app)
+      .delete('/api/v1/auth/me')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ confirmation: 'DELETE' });
+    assert.equal(deletion.status, 204);
+    assert.equal((await request(app).get('/api/v1/auth/me').set('Authorization', `Bearer ${token}`)).status, 401);
+    const persisted = await db.query('SELECT 1 FROM users WHERE id = $1', [userId]);
+    assert.equal(persisted.rows.length, 0);
+  } finally {
+    if (userId) await db.query('DELETE FROM users WHERE id = $1', [userId]);
+    await db.query('DELETE FROM users WHERE lower(email) = lower($1)', [email]);
+  }
+});
+
+test('newsletter confirmation and unsubscribe persist the expected lifecycle state', {
+  skip: integrationEnabled ? false : 'set BACKEND_TEST_DATABASE_MODE=available to run database integration tests',
+}, async () => {
+  const email = `newsletter-acceptance-${randomUUID()}@example.invalid`;
+  let subscriptionId: string | undefined;
+
+  try {
+    const created = await createNewsletterSubscription({ email, source: 'acceptance-test' });
+    subscriptionId = created.id;
+    const confirmation = await request(app).post('/api/v1/newsletter/confirm').send({ token: created.confirmationToken });
+    assert.equal(confirmation.status, 200);
+    let persisted = await db.query<{ status: string }>('SELECT status FROM newsletter_subscriptions WHERE id = $1', [subscriptionId]);
+    assert.equal(persisted.rows[0]?.status, 'active');
+
+    const unsubscribe = await request(app).post('/api/v1/newsletter/unsubscribe').send({ token: created.unsubscribeToken });
+    assert.equal(unsubscribe.status, 200);
+    persisted = await db.query('SELECT status FROM newsletter_subscriptions WHERE id = $1', [subscriptionId]);
+    assert.equal(persisted.rows[0]?.status, 'unsubscribed');
+  } finally {
+    if (subscriptionId) await db.query('DELETE FROM newsletter_subscriptions WHERE id = $1', [subscriptionId]);
+  }
+});
+
+test('newsletter webhook rejects forged signatures and accepts only authenticated provider events', async () => {
+  const email = `newsletter-signature-${randomUUID()}@example.invalid`;
+  const payload = { eventId: randomUUID(), occurredAt: new Date().toISOString(), event: 'delivered', email };
+  const forged = await request(app)
+    .post('/api/v1/newsletter/webhooks/delivery')
+    .set('X-Newsletter-Signature', 'forged-signature')
+    .send(payload);
+  assert.equal(forged.status, 401);
+  assert.equal(forged.body.error, 'invalid_webhook_signature');
+});
+
+test('reader account deletion rejects missing confirmation and preserves the account', {
+  skip: integrationEnabled ? false : 'set BACKEND_TEST_DATABASE_MODE=available to run database integration tests',
+}, async () => {
+  const email = `delete-confirmation-${randomUUID()}@example.invalid`;
+  let userId: string | undefined;
+  try {
+    const user = await registerUser('Confirmation Reader', email, 'test-password-123');
+    userId = user.id;
+    const token = await signToken(user);
+    const response = await request(app)
+      .delete('/api/v1/auth/me')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ confirmation: 'delete' });
+    assert.equal(response.status, 422);
+    const persisted = await db.query('SELECT 1 FROM users WHERE id = $1', [userId]);
+    assert.equal(persisted.rows.length, 1);
+  } finally {
+    if (userId) await db.query('DELETE FROM users WHERE id = $1', [userId]);
+  }
+});
+
+test('admin media upload stores a decoded image and public delivery follows published-content state', {
+  skip: integrationEnabled ? false : 'set BACKEND_TEST_DATABASE_MODE=available to run database integration tests',
+}, async () => {
+  const slug = `media-acceptance-${randomUUID()}`;
+  let mediaId: string | undefined;
+  let blogId: string | undefined;
+  const loginRequestId = randomUUID();
+
+  try {
+    const login = await request(app).post('/api/v1/admin/login').set('X-Request-Id', loginRequestId)
+      .send({ email: env.ADMIN_EMAIL, password: env.ADMIN_PASSWORD });
+    assert.equal(login.status, 200);
+    const token = login.body.token as string;
+    const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: { r: 30, g: 90, b: 160 } } }).png().toBuffer();
+    const upload = await request(app).post('/api/v1/media/upload')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ data: `data:image/png;base64,${png.toString('base64')}`, mimeType: 'image/png', fileName: '../../acceptance.png', altText: 'Synthetic test image' });
+    assert.equal(upload.status, 201);
+    mediaId = upload.body.id as string;
+
+    const created = await request(app).post('/api/v1/admin/blogs')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ title: 'Media Acceptance Fixture', slug, content: 'Synthetic fixture.', published: true, imageMediaId: mediaId });
+    assert.equal(created.status, 201);
+    blogId = created.body.id as string;
+
+    const publicImage = await request(app).get(`/api/v1/media/${mediaId}`);
+    assert.equal(publicImage.status, 200);
+    assert.equal(publicImage.headers['content-type'], 'image/png');
+    assert.equal(publicImage.headers['x-content-type-options'], 'nosniff');
+
+    await db.query('DELETE FROM blog_posts WHERE id = $1', [blogId]);
+    blogId = undefined;
+    assert.equal((await request(app).get(`/api/v1/media/${mediaId}`)).status, 404);
+  } finally {
+    if (blogId) await db.query('DELETE FROM blog_posts WHERE id = $1', [blogId]);
+    if (mediaId) {
+      await db.query('DELETE FROM audit_events WHERE resource_id = $1', [mediaId]);
+      await db.query('DELETE FROM media_assets WHERE id = $1', [mediaId]);
+    }
+    await db.query('DELETE FROM blog_posts WHERE slug = $1', [slug]);
+    await db.query('DELETE FROM audit_events WHERE request_id = $1', [loginRequestId]);
   }
 });
 
@@ -434,7 +794,7 @@ test('public image cache hits return a 304 without the image response body', {
       .query({ path: sourcePath })
       .set('If-None-Match', firstResponse.headers.etag);
     assert.equal(cachedResponse.status, 304);
-    assert.equal(cachedResponse.text, '');
+    assert.equal(cachedResponse.text ?? '', '');
     assert.match(cachedResponse.headers['cache-control'] ?? '', /public, max-age=300, stale-while-revalidate=60/);
   } finally {
     await db.query('DELETE FROM media_assets WHERE source_path = $1', [sourcePath]);

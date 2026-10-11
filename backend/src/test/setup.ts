@@ -17,4 +17,8 @@ if (databaseMode === 'unavailable') {
   process.env.ADMIN_PASSWORD = 'admin123';
 } else if (databaseMode !== 'available') {
   throw new Error('BACKEND_TEST_DATABASE_MODE must be either unavailable or available.');
+} else {
+  // A deterministic, non-production key lets integration tests exercise the
+  // webhook signature boundary without loading a developer or provider secret.
+  process.env.NEWSLETTER_WEBHOOK_SECRET = 'integration-test-only-webhook-secret';
 }
