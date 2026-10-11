@@ -44,6 +44,7 @@ const envSchema = z.object({
   POSTGRES_USER: z.string().default('postgres'),
   POSTGRES_PASSWORD: z.string().default('postgres'),
   POSTGRES_SSL: booleanFromEnv.default(false),
+  DATABASE_CONNECTION_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(30000),
   DATABASE_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(100).max(120000).default(15000),
   DATABASE_POOL_MAX: z.preprocess((value) => value === '' ? undefined : value, z.coerce.number().int().min(1).max(100)).default(10),
   SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(20000),

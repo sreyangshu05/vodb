@@ -38,7 +38,7 @@ const pool = new Pool({
       }),
   max: env.DATABASE_POOL_MAX,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000,
+  connectionTimeoutMillis: env.DATABASE_CONNECTION_TIMEOUT_MS,
   statement_timeout: env.DATABASE_STATEMENT_TIMEOUT_MS,
 });
 
