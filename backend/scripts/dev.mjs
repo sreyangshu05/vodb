@@ -1,5 +1,4 @@
 import { spawn } from 'node:child_process';
-import { get } from 'node:http';
 import { createServer } from 'node:net';
 import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
@@ -11,6 +10,7 @@ const backendDirectory = resolve(scriptDirectory, '..');
 dotenv.config({ path: resolve(backendDirectory, '.env') });
 
 const preferredPort = Number(process.env.PORT || 4000);
+const databaseMode = process.env.VODB_DEV_DATABASE_MODE || 'local';
 
 function isPortAvailable(port) {
   return new Promise((resolvePromise, rejectPromise) => {
@@ -28,34 +28,13 @@ function isPortAvailable(port) {
   });
 }
 
-function isBackendAlreadyRunning(port) {
-  return new Promise((resolvePromise) => {
-    const request = get(`http://127.0.0.1:${port}/api/v1/health`, { agent: false }, (response) => {
-      let body = '';
-      response.setEncoding('utf8');
-      response.on('data', (chunk) => { body += chunk; });
-      response.once('end', () => {
-        try {
-          resolvePromise(response.statusCode === 200 && JSON.parse(body).service === 'voice-of-digi-bengal-backend');
-        } catch {
-          resolvePromise(false);
-        }
-      });
-    });
-
-    request.setTimeout(900, () => request.destroy());
-    request.once('error', () => resolvePromise(false));
-  });
-}
-
-async function findAvailablePort() {
-  for (let port = preferredPort; port < preferredPort + 50; port += 1) {
-    if (await isPortAvailable(port)) return { port, alreadyRunning: false };
-    if (port !== preferredPort && await isBackendAlreadyRunning(port)) {
-      return { port, alreadyRunning: true };
-    }
+async function ensurePortAvailable(port) {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`Invalid development API port: ${port}.`);
   }
-  throw new Error(`No free development port found between ${preferredPort} and ${preferredPort + 49}.`);
+  if (!await isPortAvailable(port)) {
+    throw new Error(`Development API port ${port} is already in use. Stop the existing process; the frontend is configured to use this exact port.`);
+  }
 }
 
 async function setFrontendApiBase(port) {
@@ -78,24 +57,25 @@ async function setFrontendApiBase(port) {
 }
 
 async function main() {
-  let port;
-  let alreadyRunning;
   try {
-    ({ port, alreadyRunning } = await findAvailablePort());
-    await setFrontendApiBase(port);
+    if (!['local', 'configured'].includes(databaseMode)) {
+      throw new Error('VODB_DEV_DATABASE_MODE must be either "local" or "configured".');
+    }
+    await ensurePortAvailable(preferredPort);
+    await setFrontendApiBase(preferredPort);
   } catch (error) {
     console.error(`Could not prepare the local backend: ${error.message}`);
     process.exitCode = 1;
     return;
   }
 
-  if (alreadyRunning) {
-    console.log(`Voice Of Digi Bengal backend is already running at http://localhost:${port}. Reusing it.`);
-    return;
+  const childEnvironment = { ...process.env, PORT: String(preferredPort) };
+  if (databaseMode === 'local') {
+    childEnvironment.DATABASE_URL = '';
+    childEnvironment.DIRECT_DATABASE_URL = '';
   }
 
-  process.env.PORT = String(port);
-  console.log(`Starting Voice Of Digi Bengal backend at http://localhost:${port}.`);
+  console.log(`Starting Voice Of Digi Bengal backend at http://localhost:${preferredPort} with ${databaseMode} PostgreSQL.`);
   console.log('Frontend API base saved to frontend/.env.development.local. Restart Vite if it is already running.');
 
   const child = spawn(process.execPath, [
@@ -104,7 +84,7 @@ async function main() {
     'src/server.ts',
   ], {
     cwd: backendDirectory,
-    env: process.env,
+    env: childEnvironment,
     stdio: 'inherit',
   });
 

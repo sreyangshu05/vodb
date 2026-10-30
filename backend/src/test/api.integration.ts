@@ -217,6 +217,73 @@ test('published content journeys persist data and their admin audit records atom
   }
 });
 
+test('only the two public news stories are readable without authentication', {
+  skip: integrationEnabled ? false : 'set BACKEND_TEST_DATABASE_MODE=available to run database integration tests',
+}, async () => {
+  const slug = `editorial-note-access-${randomUUID()}`;
+  const publicNewsSlugs = [
+    'editorial-note-read-question-cross-check-explore-discuss-discover-contribute',
+    'bengal-to-boston-via-brazil-to-brisbane',
+  ];
+  let blogId: string | undefined;
+  let token: string | undefined;
+
+  try {
+    const login = await request(app)
+      .post('/api/v1/admin/login')
+      .send({ email: env.ADMIN_EMAIL, password: env.ADMIN_PASSWORD });
+    assert.equal(login.status, 200);
+    token = login.body.token as string;
+
+    const created = await request(app)
+      .post('/api/v1/admin/blogs')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        title: 'Editorial Note: Read. Question. Cross-Check. Explore. Discuss. Discover. Contribute.',
+        slug,
+        content: 'This complete editorial note must require authentication.',
+        published: false,
+      });
+    assert.equal(created.status, 201);
+    blogId = created.body.id as string;
+
+    const submitted = await request(app)
+      .post(`/api/v1/admin/blogs/${blogId}/moderation/submit-review`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('If-Match', `"${created.body.updated_at as string}"`)
+      .send({});
+    assert.equal(submitted.status, 200);
+
+    const approved = await request(app)
+      .post(`/api/v1/admin/blogs/${blogId}/moderation/approve`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('If-Match', `"${submitted.body.updated_at as string}"`)
+      .send({});
+    assert.equal(approved.status, 200);
+
+    const guestDetail = await request(app).get(`/api/v1/blogs/slug/${slug}`);
+    assert.equal(guestDetail.status, 401);
+
+    const publicListing = await request(app).get('/api/v1/blogs');
+    const listedNote = (publicListing.body as Array<{ slug: string; content: string }>)
+      .find((blog) => blog.slug === slug);
+    assert.equal(listedNote, undefined);
+    assert.ok((publicListing.body as Array<{ slug: string }>).every((blog) => publicNewsSlugs.includes(blog.slug)));
+
+    const authenticatedDetail = await request(app)
+      .get(`/api/v1/blogs/slug/${slug}`)
+      .set('Authorization', `Bearer ${token}`);
+    assert.equal(authenticatedDetail.status, 200);
+    assert.equal(authenticatedDetail.body.content, 'This complete editorial note must require authentication.');
+  } finally {
+    if (blogId) {
+      await db.query('DELETE FROM blog_posts WHERE id = $1', [blogId]);
+    } else {
+      await db.query('DELETE FROM blog_posts WHERE slug = $1', [slug]);
+    }
+  }
+});
+
 test('event create, edit, moderation, publication, and delete persist with atomic audit records', {
   skip: integrationEnabled ? false : 'set BACKEND_TEST_DATABASE_MODE=available to run database integration tests',
 }, async () => {

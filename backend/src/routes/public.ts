@@ -1,11 +1,12 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { createRateLimiter } from '../middleware/rateLimit.js';
+import { optionalAuth } from '../middleware/auth.js';
 import { AppError } from '../utils/errors.js';
 import { contactSchema, newsletterDeliveryWebhookSchema, newsletterSchema, newsletterTokenSchema } from '../lib/validators.js';
 import { confirmNewsletterSubscription, createContactInquiry, createNewsletterSubscription, discardNewsletterSubscription, processNewsletterDeliveryEvent, resendPendingNewsletterConfirmation, restorePendingNewsletterConfirmation, unsubscribeNewsletter } from '../services/submissionService.js';
 import { sendNewsletterConfirmation } from '../services/mailService.js';
-import { getBlogBySlug, getEventBySlug, listPublishedBlogs, listPublishedEvents, searchPublishedContent } from '../services/contentService.js';
+import { getBlogBySlug, getEventBySlug, listPublishedBlogs, listPublishedEvents, PUBLIC_NEWS_BLOG_SLUGS, searchPublishedContent } from '../services/contentService.js';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 import { verifyNewsletterWebhookSignature } from '../services/newsletterWebhook.js';
@@ -87,11 +88,11 @@ router.use((req, res, next) => {
   return publicLimiter(req, res, next);
 });
 
-router.get('/blogs', async (req, res, next) => {
+router.get('/blogs', optionalAuth, async (req, res, next) => {
   try {
     const { limit, offset } = paginationSchema.parse(req.query);
     res.setHeader('Cache-Control', 'no-store');
-    const rows = await listPublishedBlogs(limit, offset);
+    const rows = await listPublishedBlogs(limit, offset, !req.user);
     res.json(rows);
   } catch (error) {
     if (error instanceof z.ZodError) return next(new AppError(422, 'invalid_pagination', 'Blog pagination is invalid.'));
@@ -102,10 +103,13 @@ router.get('/blogs', async (req, res, next) => {
   }
 });
 
-router.get('/blogs/slug/:slug', async (req, res, next) => {
+router.get('/blogs/slug/:slug', optionalAuth, async (req, res, next) => {
   try {
     const slug = z.string().trim().min(1).parse(req.params.slug);
     const blog = await getBlogBySlug(slug);
+    if (!req.user && !PUBLIC_NEWS_BLOG_SLUGS.some((publicSlug) => publicSlug === slug)) {
+      throw new AppError(401, 'unauthorized', 'Authentication is required to read this article.');
+    }
     res.setHeader('Cache-Control', 'no-store');
     res.json(blog);
   } catch (error) {

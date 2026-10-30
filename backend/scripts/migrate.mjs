@@ -12,13 +12,26 @@ const repoRoot = path.resolve(backendRoot, '..');
 const migrationsDirectory = path.resolve(repoRoot, 'database/migrations');
 dotenv.config({ path: path.resolve(backendRoot, '.env') });
 
+const databaseMode = process.env.VODB_DEV_DATABASE_MODE ||
+  (process.env.NODE_ENV === 'production' ? 'configured' : 'local');
+if (!['local', 'configured'].includes(databaseMode)) {
+  throw new Error('VODB_DEV_DATABASE_MODE must be either "local" or "configured".');
+}
+
+// Local migrations must use the same local PostgreSQL settings as `npm run dev`.
+// Development .env files can also contain remote Neon URLs, so never let those
+// override the local database unless configured mode was chosen explicitly.
+const migrationEnvironment = databaseMode === 'local'
+  ? { ...process.env, DATABASE_URL: '', DIRECT_DATABASE_URL: '' }
+  : process.env;
+
 const onlyIndex = process.argv.indexOf('--only');
 const onlyMigration = onlyIndex >= 0 ? process.argv[onlyIndex + 1] : undefined;
 if (onlyIndex >= 0 && (!onlyMigration || !/^\d{3}_[a-z0-9_]+\.sql$/i.test(onlyMigration))) {
   throw new Error('Usage: npm run db:migrate -- --only <migration-file-name>');
 }
 
-const pool = new Pool(createMaintenanceDatabaseConfig(process.env, 1));
+const pool = new Pool(createMaintenanceDatabaseConfig(migrationEnvironment, 1));
 
 const migrationLock = 73821410826001;
 let client;

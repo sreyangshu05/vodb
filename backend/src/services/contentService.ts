@@ -3,10 +3,16 @@ import { AppError } from '../utils/errors.js';
 import { isDatabaseUnavailable } from '../utils/databaseErrors.js';
 import type { BlogRecord, EventRecord } from '../types/api.js';
 
-export async function listPublishedBlogs(limit = 50, offset = 0) {
+export const PUBLIC_NEWS_BLOG_SLUGS = [
+  'editorial-note-read-question-cross-check-explore-discuss-discover-contribute',
+  'bengal-to-boston-via-brazil-to-brisbane',
+] as const;
+
+export async function listPublishedBlogs(limit = 50, offset = 0, publicOnly = false) {
   try {
     const result = await db.query<BlogRecord>(`
-      SELECT b.id, b.title, b.slug, LEFT(b.content, 320) AS content,
+      SELECT b.id, b.title, b.slug,
+             LEFT(b.content, 320) AS content,
              b.meta_title, b.meta_description, b.published, b.published_at,
              b.created_at, b.updated_at, b.image_media_id,
              GREATEST(1, CEIL(char_length(b.content)::numeric / 1000)::integer) AS read_time_minutes,
@@ -14,9 +20,10 @@ export async function listPublishedBlogs(limit = 50, offset = 0) {
              m.alt_text AS image_alt
       FROM blog_posts b LEFT JOIN media_assets m ON m.id = b.image_media_id
       WHERE b.published = TRUE AND b.moderation_status = 'approved'
+        AND ($3::boolean = FALSE OR b.slug = ANY($4::text[]))
       ORDER BY b.published_at DESC, b.created_at DESC, b.id ASC
       LIMIT $1 OFFSET $2
-    `, [limit, offset]);
+    `, [limit, offset, publicOnly, PUBLIC_NEWS_BLOG_SLUGS]);
 
     return result.rows;
   } catch (error) {
