@@ -115,7 +115,7 @@ router.post('/login', loginLimiter, async (req, res, next) => {
       throw new AppError(400, 'invalid_credentials', 'Email and password are required.');
     }
 
-    const allowedAdminEmails = [env.ADMIN_EMAIL, ...env.ADMIN_EMAILS.split(',')]
+    const allowedAdminEmails = [...env.ADMIN_EMAILS.split(','), env.ADMIN_EMAIL]
       .map((address) => address.trim().toLowerCase())
       .filter(Boolean);
     if (!allowedAdminEmails.includes(email.toLowerCase()) || !(await verifyAdminPassword(password))) {
