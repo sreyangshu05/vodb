@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import { promisify } from 'node:util';
+import { execFile } from 'node:child_process';
 import { createServer } from 'node:net';
 import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
@@ -11,6 +13,23 @@ dotenv.config({ path: resolve(backendDirectory, '.env') });
 
 const preferredPort = Number(process.env.PORT || 4000);
 const databaseMode = process.env.VODB_DEV_DATABASE_MODE || 'local';
+const execFileAsync = promisify(execFile);
+
+async function ensureLocalDatabase() {
+  if (databaseMode !== 'local') return;
+  const composeFile = resolve(backendDirectory, '../database/docker-compose.yml');
+  const composeDirectory = resolve(backendDirectory, '../database');
+  try {
+    await execFileAsync('docker', ['compose', '-f', composeFile, 'up', '-d', '--wait'], {
+      cwd: composeDirectory,
+      timeout: 120_000,
+      windowsHide: true,
+    });
+  } catch (error) {
+    const detail = error.stderr?.trim() || error.message;
+    throw new Error(`Could not start the local PostgreSQL database. Ensure Docker Desktop is running and accessible, then run "docker compose -f database/docker-compose.yml up -d --wait". ${detail}`);
+  }
+}
 
 function isPortAvailable(port) {
   return new Promise((resolvePromise, rejectPromise) => {
@@ -61,6 +80,7 @@ async function main() {
     if (!['local', 'configured'].includes(databaseMode)) {
       throw new Error('VODB_DEV_DATABASE_MODE must be either "local" or "configured".');
     }
+    await ensureLocalDatabase();
     await ensurePortAvailable(preferredPort);
     await setFrontendApiBase(preferredPort);
   } catch (error) {

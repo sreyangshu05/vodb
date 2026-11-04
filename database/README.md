@@ -84,6 +84,15 @@ Migrations are intentionally ordered and plain SQL:
 - `migrations/019_create_api_error_logs.sql`
 - `migrations/020_trim_redundant_slug_indexes_and_audit_hold.sql`
 - `migrations/021_track_newsletter_delivery_webhooks.sql`
+- `migrations/022_add_blog_keywords_and_hashtags.sql`
+
+Migration 022 adds the persisted keyword and hashtag arrays used by blog editing, article display, and public search. For an existing local Docker Compose database, apply it once with:
+
+```powershell
+docker compose exec -T postgres psql -U postgres -d appdb -f /docker-entrypoint-initdb.d/022_add_blog_keywords_and_hashtags.sql
+```
+
+For environments managed by the migration ledger, apply it through `npm.cmd --prefix backend run db:migrate` before deploying the updated backend.
 
 Homepage image bytes are held in PostgreSQL `BYTEA`. Import requires adequate database storage and backup capacity (about 138 MiB for the current homepage image manifest).
 

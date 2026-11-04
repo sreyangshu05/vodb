@@ -24,12 +24,25 @@ export const newsletterDeliveryWebhookSchema = z.object({
   email: emailSchema,
 });
 
+const editorialKeywordsSchema = z.array(z.string().trim().min(1).max(80)).max(20)
+  .transform((terms) => [...new Map(terms.map((term) => [term.toLocaleLowerCase(), term])).values()])
+  .default([]);
+const editorialHashtagsSchema = z.array(
+  z.string().trim()
+    .transform((tag) => tag.replace(/^#+/, '').replace(/\s+/g, '-'))
+    .pipe(z.string().min(1).max(50).regex(/^[\p{L}\p{N}_-]+$/u, 'Hashtags may contain letters, numbers, hyphens, and underscores.')),
+).max(20)
+  .transform((tags) => [...new Map(tags.map((tag) => [tag.toLocaleLowerCase(), tag])).values()])
+  .default([]);
+
 export const blogPayloadSchema = z.object({
   title: z.string().trim().min(1).max(240),
   slug: z.string().trim().min(1).max(260),
   content: z.string().trim().min(1),
   metaTitle: z.string().trim().max(240).nullable().optional(),
   metaDescription: z.string().trim().max(320).nullable().optional(),
+  keywords: editorialKeywordsSchema,
+  hashtags: editorialHashtagsSchema,
   published: z.boolean().default(false),
   imageMediaId: z.string().uuid().nullable().optional(),
 });

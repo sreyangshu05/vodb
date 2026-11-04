@@ -141,6 +141,28 @@ router.post('/login', loginLimiter, async (req, res, next) => {
 
 router.use(adminIpLimiter, requireAuth, requireAdmin, adminApiLimiter);
 
+router.get('/media/:id/preview', async (req, res, next) => {
+  try {
+    const id = z.string().uuid().parse(req.params.id);
+    const result = await db.query<{ image_data: Buffer; mime_type: string }>(
+      'SELECT image_data, mime_type FROM media_assets WHERE id = $1',
+      [id],
+    );
+    const image = result.rows[0];
+    if (!image) throw new AppError(404, 'image_not_found', 'Image not found.');
+    res.set({
+      'Content-Type': image.mime_type,
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Disposition': 'inline',
+    });
+    res.send(image.image_data);
+  } catch (error) {
+    if (error instanceof z.ZodError) return next(new AppError(400, 'invalid_media_id', 'Media id must be a UUID.'));
+    next(error);
+  }
+});
+
 router.post('/ai/editorial-suggestions', editorialAssistLimiter, async (req, res, next) => {
   try {
     const payload = editorialAssistSchema.parse(req.body ?? {});
@@ -427,7 +449,13 @@ router.get('/users', async (req, res, next) => {
 router.get('/blogs', async (req, res, next) => {
   try {
     const { limit, offset } = paginationSchema.parse(req.query);
-    const result = await db.query(`SELECT * FROM blog_posts ORDER BY created_at DESC, id ASC LIMIT $1 OFFSET $2`, [limit, offset]);
+    const result = await db.query(`
+      SELECT b.*, m.alt_text AS image_alt
+      FROM blog_posts b
+      LEFT JOIN media_assets m ON m.id = b.image_media_id
+      ORDER BY b.created_at DESC, b.id ASC
+      LIMIT $1 OFFSET $2
+    `, [limit, offset]);
     res.json(result.rows);
   } catch (error) {
     next(error);
@@ -440,8 +468,8 @@ router.post('/blogs', async (req, res, next) => {
     await assertMediaExists(payload.imageMediaId);
     const rows = await mutateAndAudit(
       async (client) => (await client.query(
-      `INSERT INTO blog_posts (title, slug, content, meta_title, meta_description, published, published_at, moderation_status, created_at, updated_at, image_media_id)
-       VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $6 THEN NOW() ELSE NULL END, CASE WHEN $6 THEN 'approved' ELSE 'draft' END, NOW(), NOW(), $7)
+      `INSERT INTO blog_posts (title, slug, content, meta_title, meta_description, published, published_at, moderation_status, created_at, updated_at, image_media_id, keywords, hashtags, keywords_search_text, hashtags_search_text)
+       VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $6 THEN NOW() ELSE NULL END, CASE WHEN $6 THEN 'approved' ELSE 'draft' END, NOW(), NOW(), $7, $8, $9, $10, $11)
        RETURNING *`,
       [
         payload.title,
@@ -451,6 +479,10 @@ router.post('/blogs', async (req, res, next) => {
         payload.metaDescription ?? null,
         payload.published,
         payload.imageMediaId ?? null,
+        payload.keywords,
+        payload.hashtags,
+        payload.keywords.join(' '),
+        payload.hashtags.join(' '),
       ])).rows,
       (row) => ({ actorId: req.user?.id, action: 'admin.blog.create', resourceType: 'blog_post', resourceId: String(row.id), metadata: { slug: payload.slug, published: payload.published }, requestId: req.headers['x-request-id'] as string | undefined }),
     );
@@ -482,6 +514,14 @@ router.patch('/blogs/:id', async (req, res, next) => {
     if (payload.metaTitle !== undefined) add('meta_title', payload.metaTitle);
     if (payload.metaDescription !== undefined) add('meta_description', payload.metaDescription);
     if (payload.imageMediaId !== undefined) add('image_media_id', payload.imageMediaId);
+    if (payload.keywords !== undefined) {
+      add('keywords', payload.keywords);
+      add('keywords_search_text', payload.keywords.join(' '));
+    }
+    if (payload.hashtags !== undefined) {
+      add('hashtags', payload.hashtags);
+      add('hashtags_search_text', payload.hashtags.join(' '));
+    }
     if (!fields.length) throw new AppError(422, 'invalid_payload', 'At least one blog field is required.');
 
     values.push(id, expectedVersion);

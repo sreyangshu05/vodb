@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { db } from '../lib/db.js';
-import { listPublishedBlogs, listPublishedEvents, PUBLIC_NEWS_BLOG_SLUGS, searchPublishedContent } from '../services/contentService.js';
+import { listPublishedBlogs, listPublishedEvents, searchPublishedContent } from '../services/contentService.js';
 
 test('public content feeds and search use deterministic unique tie-breakers', async () => {
   const statements: string[] = [];
@@ -28,7 +28,7 @@ test('public content feeds and search use deterministic unique tie-breakers', as
   }
 });
 
-test('anonymous blog listings are restricted to the two public news slugs', async () => {
+test('public blog listings include every approved published story without a slug allowlist', async () => {
   let queryParams: unknown[] | undefined;
   const originalQuery = db.query;
   db.query = (async (_sql: string, params?: unknown[]) => {
@@ -37,10 +37,10 @@ test('anonymous blog listings are restricted to the two public news slugs', asyn
   }) as unknown as typeof db.query;
 
   try {
-    await listPublishedBlogs(10, 20, true);
+    await listPublishedBlogs(10, 20);
   } finally {
     db.query = originalQuery;
   }
 
-  assert.deepEqual(queryParams, [10, 20, true, PUBLIC_NEWS_BLOG_SLUGS]);
+  assert.deepEqual(queryParams, [10, 20]);
 });

@@ -13,6 +13,8 @@ export interface BlogRecord {
   content: string;
   meta_title: string | null;
   meta_description: string | null;
+  keywords: string[];
+  hashtags: string[];
   published: boolean;
   published_at: string | null;
   created_at: string;

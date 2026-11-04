@@ -217,14 +217,10 @@ test('published content journeys persist data and their admin audit records atom
   }
 });
 
-test('only the two public news stories are readable without authentication', {
+test('approved published stories from the admin are readable without authentication', {
   skip: integrationEnabled ? false : 'set BACKEND_TEST_DATABASE_MODE=available to run database integration tests',
 }, async () => {
   const slug = `editorial-note-access-${randomUUID()}`;
-  const publicNewsSlugs = [
-    'editorial-note-read-question-cross-check-explore-discuss-discover-contribute',
-    'bengal-to-boston-via-brazil-to-brisbane',
-  ];
   let blogId: string | undefined;
   let token: string | undefined;
 
@@ -241,7 +237,7 @@ test('only the two public news stories are readable without authentication', {
       .send({
         title: 'Editorial Note: Read. Question. Cross-Check. Explore. Discuss. Discover. Contribute.',
         slug,
-        content: 'This complete editorial note must require authentication.',
+        content: 'This approved story should be available on the public news page.',
         published: false,
       });
     assert.equal(created.status, 201);
@@ -262,19 +258,19 @@ test('only the two public news stories are readable without authentication', {
     assert.equal(approved.status, 200);
 
     const guestDetail = await request(app).get(`/api/v1/blogs/slug/${slug}`);
-    assert.equal(guestDetail.status, 401);
+    assert.equal(guestDetail.status, 200);
+    assert.equal(guestDetail.body.content, 'This approved story should be available on the public news page.');
 
     const publicListing = await request(app).get('/api/v1/blogs');
     const listedNote = (publicListing.body as Array<{ slug: string; content: string }>)
       .find((blog) => blog.slug === slug);
-    assert.equal(listedNote, undefined);
-    assert.ok((publicListing.body as Array<{ slug: string }>).every((blog) => publicNewsSlugs.includes(blog.slug)));
+    assert.ok(listedNote);
 
     const authenticatedDetail = await request(app)
       .get(`/api/v1/blogs/slug/${slug}`)
       .set('Authorization', `Bearer ${token}`);
     assert.equal(authenticatedDetail.status, 200);
-    assert.equal(authenticatedDetail.body.content, 'This complete editorial note must require authentication.');
+    assert.equal(authenticatedDetail.body.content, 'This approved story should be available on the public news page.');
   } finally {
     if (blogId) {
       await db.query('DELETE FROM blog_posts WHERE id = $1', [blogId]);
