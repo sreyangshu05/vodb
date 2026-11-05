@@ -186,6 +186,7 @@ router.get('/:id', mediaReadLimiter, async (req, res, next) => {
     if (!parsed.success) throw new AppError(400, 'invalid_media_id', 'Media id must be a UUID.');
     const publishedImagePredicate = `m.id = $1 AND (
        EXISTS (SELECT 1 FROM blog_posts b WHERE b.image_media_id = m.id AND b.published = TRUE AND b.moderation_status = 'approved') OR
+       EXISTS (SELECT 1 FROM blog_posts b WHERE b.published = TRUE AND b.moderation_status = 'approved' AND strpos(b.content, '/api/v1/media/' || m.id::text) > 0) OR
        EXISTS (SELECT 1 FROM events e WHERE e.image_media_id = m.id AND e.published = TRUE AND e.moderation_status = 'approved')
      )`;
     if (hasCacheValidators(req)) {
